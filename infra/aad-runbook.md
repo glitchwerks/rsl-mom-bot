@@ -1,5 +1,8 @@
 # AAD Provisioning Runbook — mom-bot-gha
 
+> Commands in this runbook are **PowerShell**. Copy-paste directly into a
+> PowerShell 7+ session (`pwsh`). Do not run them in bash or Command Prompt.
+
 Bicep cannot create AAD app registrations (Microsoft Graph operations are not
 supported in ARM/Bicep). This runbook covers the one-time manual steps required
 before Bicep can deploy the rest of the infrastructure.
@@ -11,7 +14,7 @@ Run these commands once, in order, as the subscription owner in tenant
 
 ## Prerequisites
 
-```bash
+```powershell
 # Log in to the correct tenant. Always pass --tenant to avoid cross-tenant confusion.
 az login --tenant 48bca6c3-6d4f-4884-bc1a-648ae2362a32
 
@@ -26,13 +29,13 @@ az account show --query '{tenant:tenantId, sub:id, name:name}' -o table
 
 ## Step 1 — Create the AAD app registration
 
-```bash
-APP_ID=$(az ad app create \
-  --display-name mom-bot-gha \
-  --query appId \
-  --output tsv)
+```powershell
+$AppId = az ad app create `
+  --display-name mom-bot-gha `
+  --query appId `
+  --output tsv
 
-echo "APP_ID=$APP_ID"
+Write-Host "AppId=$AppId"
 # Save this — you need it in the next step and for the repo variable.
 ```
 
@@ -42,10 +45,10 @@ echo "APP_ID=$APP_ID"
 
 The app registration needs a service principal so Azure RBAC can target it.
 
-```bash
-SP_OBJECT_ID=$(az ad sp create --id "$APP_ID" --query id --output tsv)
+```powershell
+$SpObjectId = az ad sp create --id $AppId --query id --output tsv
 
-echo "SP_OBJECT_ID=$SP_OBJECT_ID"
+Write-Host "SpObjectId=$SpObjectId"
 # Save this — it is the ghaServicePrincipalObjectId parameter in main.bicepparam.
 ```
 
@@ -53,34 +56,46 @@ echo "SP_OBJECT_ID=$SP_OBJECT_ID"
 
 ## Step 3 — Add federated credentials (OIDC trust)
 
-Two federated credentials are required for the A++ dev/prod model:
+Two federated credentials are required for the A++ dev/prod model.
+
+The JSON body is written to a temp file to avoid PowerShell interpolating
+dollar-signs inside the JSON. The closing `'@` must be at column 0 — no
+leading whitespace.
 
 ### 3a — Trust pushes to `main`
 
-```bash
-az ad app federated-credential create \
-  --id "$APP_ID" \
-  --parameters '{
-    "name": "mom-bot-main-push",
-    "issuer": "https://token.actions.githubusercontent.com",
-    "subject": "repo:glitchwerks/mom-bot:ref:refs/heads/main",
-    "description": "GHA OIDC trust for pushes to main branch",
-    "audiences": ["api://AzureADTokenExchange"]
-  }'
+```powershell
+$FedCredMain = @'
+{
+  "name": "mom-bot-main-push",
+  "issuer": "https://token.actions.githubusercontent.com",
+  "subject": "repo:glitchwerks/mom-bot:ref:refs/heads/main",
+  "description": "GHA OIDC trust for pushes to main branch",
+  "audiences": ["api://AzureADTokenExchange"]
+}
+'@
+$TempFile = New-TemporaryFile
+$FedCredMain | Out-File -FilePath $TempFile.FullName -Encoding utf8 -NoNewline
+az ad app federated-credential create --id $AppId --parameters "@$($TempFile.FullName)"
+Remove-Item $TempFile
 ```
 
 ### 3b — Trust pull requests (for IaC what-if checks on PRs)
 
-```bash
-az ad app federated-credential create \
-  --id "$APP_ID" \
-  --parameters '{
-    "name": "mom-bot-pr",
-    "issuer": "https://token.actions.githubusercontent.com",
-    "subject": "repo:glitchwerks/mom-bot:pull_request",
-    "description": "GHA OIDC trust for pull request workflows",
-    "audiences": ["api://AzureADTokenExchange"]
-  }'
+```powershell
+$FedCredPr = @'
+{
+  "name": "mom-bot-pr",
+  "issuer": "https://token.actions.githubusercontent.com",
+  "subject": "repo:glitchwerks/mom-bot:pull_request",
+  "description": "GHA OIDC trust for pull request workflows",
+  "audiences": ["api://AzureADTokenExchange"]
+}
+'@
+$TempFile = New-TemporaryFile
+$FedCredPr | Out-File -FilePath $TempFile.FullName -Encoding utf8 -NoNewline
+az ad app federated-credential create --id $AppId --parameters "@$($TempFile.FullName)"
+Remove-Item $TempFile
 ```
 
 > **Note:** Do NOT create `:environment:dev` or `:environment:prod` federations.
@@ -96,18 +111,18 @@ Open `infra/main.bicepparam` and replace the placeholder:
 param ghaServicePrincipalObjectId = 'REPLACE_AFTER_AAD_RUNBOOK'
 ```
 
-with the `SP_OBJECT_ID` value from Step 2.
+with the `$SpObjectId` value from Step 2.
 
 ---
 
 ## Step 5 — Deploy Bicep infrastructure
 
-```bash
-az deployment sub create \
-  --location eastus2 \
-  --template-file infra/main.bicep \
-  --parameters infra/main.bicepparam \
-  --subscription 213aa1f8-32d1-4ffe-8f4d-6e60f1cd9dc0 \
+```powershell
+az deployment sub create `
+  --location eastus2 `
+  --template-file infra/main.bicep `
+  --parameters infra/main.bicepparam `
+  --subscription 213aa1f8-32d1-4ffe-8f4d-6e60f1cd9dc0 `
   --tenant 48bca6c3-6d4f-4884-bc1a-648ae2362a32
 ```
 
@@ -116,40 +131,40 @@ Bicep handles the Key Vault RBAC role assignments:
 - `mi-mom-bot` → **Key Vault Secrets User** (runtime read-only)
 - `mom-bot-gha` SP → **Key Vault Secrets Officer** (deploy-time read+write)
 
-If the Bicep role assignments fail (e.g. ghaServicePrincipalObjectId was wrong),
+If the Bicep role assignments fail (e.g. `ghaServicePrincipalObjectId` was wrong),
 assign manually:
 
-```bash
-KV_ID=$(az keyvault show -g mom-bot -n kv-mombot-eastus2 --query id -o tsv)
+```powershell
+$KvId = az keyvault show -g mom-bot -n kv-mombot-eastus2 --query id -o tsv
 
 # Key Vault Secrets Officer for the GHA service principal
-az role assignment create \
-  --role "Key Vault Secrets Officer" \
-  --assignee-object-id "$SP_OBJECT_ID" \
-  --assignee-principal-type ServicePrincipal \
-  --scope "$KV_ID"
+az role assignment create `
+  --role "Key Vault Secrets Officer" `
+  --assignee-object-id $SpObjectId `
+  --assignee-principal-type ServicePrincipal `
+  --scope $KvId
 
 # Key Vault Secrets User for the managed identity
-MI_PRINCIPAL=$(az identity show -g mom-bot -n mi-mom-bot --query principalId -o tsv)
-az role assignment create \
-  --role "Key Vault Secrets User" \
-  --assignee-object-id "$MI_PRINCIPAL" \
-  --assignee-principal-type ServicePrincipal \
-  --scope "$KV_ID"
+$MiPrincipalId = az identity show -g mom-bot -n mi-mom-bot --query principalId -o tsv
+az role assignment create `
+  --role "Key Vault Secrets User" `
+  --assignee-object-id $MiPrincipalId `
+  --assignee-principal-type ServicePrincipal `
+  --scope $KvId
 ```
 
 ---
 
 ## Step 6 — Set GitHub repo variables
 
-In the `glitchwerks/mom-bot` repository settings, create these **Variables**
-(not Secrets — they are non-sensitive OIDC identifiers):
+These are **Variables** (not Secrets — they are non-sensitive OIDC identifiers).
+`gh variable set` writes them directly from the values captured in earlier steps.
 
-| Variable name | Value |
-|---|---|
-| `AZURE_CLIENT_ID` | `$APP_ID` from Step 1 |
-| `AZURE_TENANT_ID` | `48bca6c3-6d4f-4884-bc1a-648ae2362a32` |
-| `AZURE_SUBSCRIPTION_ID` | `213aa1f8-32d1-4ffe-8f4d-6e60f1cd9dc0` |
+```powershell
+gh variable set AZURE_CLIENT_ID --body $AppId --repo glitchwerks/mom-bot
+gh variable set AZURE_TENANT_ID --body 48bca6c3-6d4f-4884-bc1a-648ae2362a32 --repo glitchwerks/mom-bot
+gh variable set AZURE_SUBSCRIPTION_ID --body 213aa1f8-32d1-4ffe-8f4d-6e60f1cd9dc0 --repo glitchwerks/mom-bot
+```
 
 ---
 
@@ -158,54 +173,66 @@ In the `glitchwerks/mom-bot` repository settings, create these **Variables**
 Your own user account needs `Key Vault Secrets User` on the KV to read
 `dev-*` secrets locally via `az login` + `DefaultAzureCredential`.
 
-```bash
-MY_OBJECT_ID=$(az ad signed-in-user show --query id -o tsv)
+```powershell
+$MyObjectId = az ad signed-in-user show --query id -o tsv
 
-az role assignment create \
-  --role "Key Vault Secrets User" \
-  --assignee-object-id "$MY_OBJECT_ID" \
-  --assignee-principal-type User \
-  --scope "$KV_ID"
+# Capture the KV resource ID if you did not run the manual fallback in Step 5.
+$KvScope = az keyvault show --name kv-mombot-eastus2 --resource-group mom-bot --query id -o tsv
+
+az role assignment create `
+  --role "Key Vault Secrets User" `
+  --assignee-object-id $MyObjectId `
+  --assignee-principal-type User `
+  --scope $KvScope
 ```
 
 ---
 
 ## Step 8 — Seed initial secrets
 
-```bash
+For each secret, paste the real value when prompted or supply it inline. Do not
+commit actual token values. If you prefer to avoid the value appearing in your
+terminal history, use `Read-Host -AsSecureString` and convert — but for a
+one-time setup, plain inline paste is fine.
+
+See `docs/secrets-inventory.md` for the full list of secret names and their
+expected formats.
+
+```powershell
 # Discord bot token (prod)
-az keyvault secret set \
-  --vault-name kv-mombot-eastus2 \
-  --name prod-discord-token \
+az keyvault secret set `
+  --vault-name kv-mombot-eastus2 `
+  --name prod-discord-token `
   --value "<paste prod token>"
 
 # Discord bot token (dev — your test bot or same token for local dev)
-az keyvault secret set \
-  --vault-name kv-mombot-eastus2 \
-  --name dev-discord-token \
+az keyvault secret set `
+  --vault-name kv-mombot-eastus2 `
+  --name dev-discord-token `
   --value "<paste dev token>"
 
 # Database URL (prod — SQLite path on Container Apps volume, or Postgres later)
-az keyvault secret set \
-  --vault-name kv-mombot-eastus2 \
-  --name prod-database-url \
+az keyvault secret set `
+  --vault-name kv-mombot-eastus2 `
+  --name prod-database-url `
   --value "sqlite:////data/mom_bot.db"
 
 # Database URL (dev — local SQLite)
-az keyvault secret set \
-  --vault-name kv-mombot-eastus2 \
-  --name dev-database-url \
+az keyvault secret set `
+  --vault-name kv-mombot-eastus2 `
+  --name dev-database-url `
   --value "sqlite:///./mom_bot_dev.db"
 
 # App Insights connection string (placeholder — provisioning is Epic 1+)
 # Leave these empty or set placeholder until App Insights is provisioned.
-az keyvault secret set \
-  --vault-name kv-mombot-eastus2 \
-  --name prod-app-insights-conn-string \
+az keyvault secret set `
+  --vault-name kv-mombot-eastus2 `
+  --name prod-app-insights-conn-string `
   --value "PLACEHOLDER"
-az keyvault secret set \
-  --vault-name kv-mombot-eastus2 \
-  --name dev-app-insights-conn-string \
+
+az keyvault secret set `
+  --vault-name kv-mombot-eastus2 `
+  --name dev-app-insights-conn-string `
   --value "PLACEHOLDER"
 ```
 
@@ -233,11 +260,11 @@ image to `ca-mom-bot`. First run succeeds if:
 
 ## Summary checklist
 
-- [ ] Step 1 — AAD app created; `APP_ID` saved
-- [ ] Step 2 — Service principal created; `SP_OBJECT_ID` saved
+- [ ] Step 1 — AAD app created; `$AppId` saved
+- [ ] Step 2 — Service principal created; `$SpObjectId` saved
 - [ ] Step 3a — Federated credential for `main` push created
 - [ ] Step 3b — Federated credential for pull requests created
-- [ ] Step 4 — `main.bicepparam` updated with `SP_OBJECT_ID`
+- [ ] Step 4 — `main.bicepparam` updated with `$SpObjectId`
 - [ ] Step 5 — Bicep deployed successfully
 - [ ] Step 6 — Repo variables set in GitHub
 - [ ] Step 7 — Your user account has `Key Vault Secrets User`
