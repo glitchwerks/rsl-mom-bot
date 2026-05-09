@@ -14,6 +14,8 @@ Run these commands once, in order, as the subscription owner in tenant
 
 ## Prerequisites
 
+The `az login --tenant 48bca6c3-...` call below establishes the tenant for the entire session. Resource-management commands (`az deployment ...`, `az role assignment ...`, `az keyvault ...`) inherit the tenant from the active login session and reject `--tenant` as an unrecognized argument.
+
 ```powershell
 # Log in to the correct tenant. Always pass --tenant to avoid cross-tenant confusion.
 az login --tenant 48bca6c3-6d4f-4884-bc1a-648ae2362a32
@@ -122,8 +124,7 @@ az deployment sub create `
   --template-file infra/main.bicep `
   --parameters infra/main.bicepparam `
   --parameters ghaServicePrincipalObjectId=$SpObjectId `
-  --subscription 213aa1f8-32d1-4ffe-8f4d-6e60f1cd9dc0 `
-  --tenant 48bca6c3-6d4f-4884-bc1a-648ae2362a32
+  --subscription 213aa1f8-32d1-4ffe-8f4d-6e60f1cd9dc0
 ```
 
 Bicep handles the Key Vault RBAC role assignments:
