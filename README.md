@@ -55,19 +55,55 @@ uv pip install -e ".[dev]"
 docker build .
 ```
 
+## Database / Migrations
+
+Mom-bot uses [Alembic](https://alembic.sqlalchemy.org/) for schema migrations backed by SQLAlchemy.
+The local dev default is SQLite; production and staging inject a different URL via the
+`MOM_BOT_DATABASE_URL` environment variable.
+
+**Apply all pending migrations:**
+
+```bash
+alembic upgrade head
+```
+
+**Generate a new migration after adding or changing models:**
+
+```bash
+# 1. Generate the migration file (review it before applying)
+alembic revision --autogenerate -m "describe change"
+
+# 2. Review migrations/versions/<rev>_describe_change.py — remove any spurious ops
+
+# 3. Apply the migration
+alembic upgrade head
+```
+
+Set `MOM_BOT_DATABASE_URL` to override the default SQLite URL for prod/staging
+(e.g. `postgresql+psycopg2://user:pass@host/dbname`).
+
 ## Project Structure
 
 ```
 mom-bot/
 ├── src/
-│   └── mom_bot/          # Main package (src-layout)
-│       ├── __init__.py   # Package version
-│       └── __main__.py   # `python -m mom_bot` entrypoint (placeholder)
+│   └── mom_bot/                   # Main package (src-layout)
+│       ├── __init__.py            # Package version
+│       ├── __main__.py            # `python -m mom_bot` entrypoint (placeholder)
+│       └── db/
+│           └── __init__.py        # SQLAlchemy DeclarativeBase (Base)
+├── migrations/                    # Alembic migration scripts
+│   ├── env.py                     # Wired to Base.metadata; reads MOM_BOT_DATABASE_URL
+│   ├── script.py.mako             # Migration file template
+│   └── versions/
+│       └── 2f03efc88bf2_baseline.py  # Empty baseline (sequence 0001)
 ├── tests/
-│   └── test_smoke.py     # Baseline smoke test
-├── docs/                 # Design docs, framework plan
-├── pyproject.toml        # PEP 621 metadata, tool configs
-├── Dockerfile            # Container build (python:3.12-slim, non-root)
+│   ├── test_smoke.py              # Package importability smoke test
+│   └── test_alembic.py            # Alembic config and revision wiring test
+├── alembic.ini                    # Alembic config (local SQLite default)
+├── docs/                          # Design docs, framework plan
+├── pyproject.toml                 # PEP 621 metadata, tool configs
+├── Dockerfile                     # Container build (python:3.12-slim, non-root)
 └── .dockerignore
 ```
 
