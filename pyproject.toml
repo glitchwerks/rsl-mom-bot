@@ -47,6 +47,12 @@ python_version = "3.12"
 module = "discord.*"
 ignore_missing_imports = true
 
+# Alembic auto-generates env.py and migration files that don't carry full
+# type annotations; exclude them from strict checking.
+[[tool.mypy.overrides]]
+module = "migrations.*"
+ignore_errors = true
+
 [tool.pytest.ini_options]
 pythonpath = ["src"]
 asyncio_mode = "auto"
