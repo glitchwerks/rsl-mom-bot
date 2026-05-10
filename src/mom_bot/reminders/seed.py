@@ -146,30 +146,25 @@ def _maybe_seed_reminders(
 
     if not bot.guilds:
         _logger.critical(
-            "_maybe_seed_reminders: bot has no guilds; gateway READY " "did not populate the cache"
+            "_maybe_seed_reminders: bot has no guilds; gateway READY did not populate the cache"
         )
-        _err: ConfigError = ConfigError.__new__(ConfigError)
-        Exception.__init__(
-            _err,
-            "Bot has no guilds at seed time" " — gateway READY ordering bug?",
-        )
-        raise _err
+        raise ConfigError(message="Bot has no guilds at seed time — gateway READY ordering bug?")
 
+    # Single-guild deployments (dev/prod) — bot is invited to exactly one
+    # guild per env.  Multi-guild support is out of scope for v1.0; this
+    # becomes the place to add guild-selection logic if/when needed.
     guild = bot.guilds[0]
     channel = discord.utils.get(guild.text_channels, name=channel_name)
     if channel is None:
         _logger.critical(
-            "_maybe_seed_reminders: channel %r not found in guild %r " "(id=%d)",
+            "_maybe_seed_reminders: channel %r not found in guild %r (id=%d)",
             channel_name,
             guild.name,
             guild.id,
         )
-        _err = ConfigError.__new__(ConfigError)
-        Exception.__init__(
-            _err,
-            f"Reminder channel '{channel_name}' not found in guild" f" '{guild.name}'",
+        raise ConfigError(
+            message=f"Reminder channel '{channel_name}' not found in guild '{guild.name}'"
         )
-        raise _err
 
     channel_id: int = channel.id
 
@@ -195,7 +190,7 @@ def _maybe_seed_reminders(
     )
     session.commit()
     _logger.info(
-        "_maybe_seed_reminders: seeded Hydra and Chimera" " (channel=%r → id=%d, no role mention)",
+        "_maybe_seed_reminders: seeded Hydra and Chimera (channel=%r → id=%d, no role mention)",
         channel_name,
         channel_id,
     )

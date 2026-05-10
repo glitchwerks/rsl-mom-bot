@@ -60,6 +60,15 @@ empty. It must be populated in both `kv-mom-bot-dev` and `kv-mom-bot-prod`
 **before** deploying the bot for the first time; the bot exits with CRITICAL if
 it is missing.
 
+> **Warning — channel renames require a manual SQL UPDATE.**
+> The channel name is resolved to a snowflake once at first boot and stored in
+> the `channel_id` DB column. If the Discord channel is renamed after the initial
+> seed, `seed.py` will not re-run (the table is non-empty) and the stored
+> snowflake remains valid — the channel still exists, only its name changed.
+> However, if you ever clear the DB and reseed, the new name must already be in
+> KV. To update the stored snowflake without reseeding, run:
+> `UPDATE reminders SET channel_id = <new-snowflake> WHERE name = '<X>'`
+
 Both Hydra and Chimera reminders fire to the **same channel per env** — a
 single `reminder-channel-name` secret replaces the previous per-reminder
 `reminder-hydra-channel-id` / `reminder-chimera-channel-id` pair (#43).
