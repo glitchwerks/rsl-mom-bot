@@ -83,9 +83,13 @@ class ConfigError(Exception):
                 (e.g. Discord client state errors).
 
         Raises:
+            ValueError: If both ``secret_name`` and ``message`` are
+                supplied (ambiguous — exactly one is required).
             ValueError: If neither ``secret_name`` nor ``message`` is
                 supplied.
         """
+        if secret_name is not None and message is not None:
+            raise ValueError("ConfigError requires exactly one of secret_name or message, not both")
         self.secret_name = secret_name
         if message is not None:
             super().__init__(message)
