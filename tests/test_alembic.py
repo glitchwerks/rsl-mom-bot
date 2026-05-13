@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import configparser
 from pathlib import Path
 
 import pytest
@@ -29,6 +30,30 @@ def _make_alembic_config(db_path: str) -> Config:
     cfg = Config(_ALEMBIC_INI)
     cfg.set_main_option("sqlalchemy.url", f"sqlite:///{db_path}")
     return cfg
+
+
+def test_default_db_url_matches_alembic_ini() -> None:
+    """_DEFAULT_DB_URL in main.py matches alembic.ini's sqlalchemy.url.
+
+    Regression test for issue #55: the bot's fallback SQLite filename was
+    ``mom_bot.db`` (underscore) while alembic.ini used ``mom-bot.db`` (hyphen).
+    With MOM_BOT_DATABASE_URL unset, alembic would migrate one file and the
+    bot would open the other, causing missing-table errors at startup.
+
+    Uses configparser directly (not the alembic API) so this test has no
+    alembic import dependency and stays fast/pure.
+    """
+    from mom_bot.main import _DEFAULT_DB_URL
+
+    parser = configparser.ConfigParser()
+    parser.read(_ALEMBIC_INI)
+    alembic_url = parser.get("alembic", "sqlalchemy.url")
+
+    assert _DEFAULT_DB_URL == alembic_url, (
+        f"Mismatch: main._DEFAULT_DB_URL={_DEFAULT_DB_URL!r} "
+        f"but alembic.ini sqlalchemy.url={alembic_url!r}. "
+        "Both must use the same filename so alembic and the bot share one DB."
+    )
 
 
 def test_alembic_can_load_config() -> None:
