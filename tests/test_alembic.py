@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 import configparser
+import logging.config
 from pathlib import Path
+from typing import Any
+from unittest.mock import patch
 
 import pytest
 import sqlalchemy as sa
@@ -15,6 +18,41 @@ from alembic.script import ScriptDirectory
 # Windows dev machines and Linux CI runners.
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 _ALEMBIC_INI = str(_REPO_ROOT / "alembic.ini")
+
+
+# ---------------------------------------------------------------------------
+# Session-scoped autouse fixture: prevent alembic from disabling loggers
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture(autouse=True, scope="module")
+def _no_disable_existing_loggers() -> Any:
+    """Force ``disable_existing_loggers=False`` on every ``fileConfig`` call.
+
+    ``alembic.command.upgrade`` invokes ``migrations/env.py``, which calls
+    ``logging.config.fileConfig(alembic_ini)``.  The stdlib default for
+    ``disable_existing_loggers`` is ``True``, which sets ``.disabled = True``
+    on every logger that existed before the call — including ``mom_bot.main``.
+
+    When ``test_default_db_url_matches_alembic_ini`` (in this module) imports
+    ``mom_bot.main``, it registers that logger.  Any subsequent
+    ``command.upgrade`` call then silences it, causing
+    ``test_reminder_task_exception_logs_critical`` in ``test_main_wireup.py``
+    to see no CRITICAL records from ``caplog``.
+
+    This fixture wraps ``fileConfig`` so the ``disable_existing_loggers``
+    argument is always ``False``, without touching ``env.py`` or the
+    production logging configuration.
+    """
+    _real_fileConfig = logging.config.fileConfig
+
+    def _patched_fileConfig(fname: Any, *args: Any, **kwargs: Any) -> None:
+        """Delegate to real fileConfig with disable_existing_loggers=False."""
+        kwargs["disable_existing_loggers"] = False
+        _real_fileConfig(fname, *args, **kwargs)
+
+    with patch("logging.config.fileConfig", side_effect=_patched_fileConfig):
+        yield
 
 
 def _make_alembic_config(db_path: str) -> Config:
