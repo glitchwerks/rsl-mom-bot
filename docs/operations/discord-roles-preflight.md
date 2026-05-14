@@ -53,14 +53,101 @@ the bot's reach — that is by design.
 ### Install bitfield includes `MANAGE_ROLES`
 
 - [ ] Mom-bot's integration role has **Manage Roles** ticked in Server Settings → Roles →
-  _(mom-bot role)_ → Permissions
+  _(mom-bot role)_ → Permissions. See [Verifying the current grant](#verifying-the-current-grant)
+  below for step-by-step instructions.
 
-`MANAGE_ROLES` is bit `1 << 28` — decimal `268435456`, hex `0x10000000`. The conservative install
-URL integer for mom-bot is `17592454531072`; this already includes `MANAGE_ROLES`. If reinstalling,
-verify the URL's `permissions=` integer equals or is a superset of `17592454531072`.
+#### Required permissions bitfield
 
-For the full permissions reference, including layer definitions, scopes, and intents, see
-`docs/discord-permissions-reference.md`.
+The table below lists every guild permission mom-bot uses, derived from a codebase audit of
+`src/mom_bot/` conducted on 2026-05-14 (issue #63). Bit values follow the Discord API
+permissions reference.[^perms-ref]
+
+| Permission        | Bit | Hex          | Why mom-bot needs it                                                                        |
+| ----------------- | --- | ------------ | ------------------------------------------------------------------------------------------- |
+| `Send Messages`   | 11  | `0x00000800` | Reminder delivery (`channel.send` — `src/mom_bot/reminders/scheduler.py:256,260`); `/ping` response (`src/mom_bot/main.py:314`) |
+| `Embed Links`     | 14  | `0x00004000` | Ephemeral embed responses; reminder formatting (`docs/discord-permissions-reference.md § Layer 2`) |
+| `Attach Files`    | 15  | `0x00008000` | Sidecar `post-image` endpoint (`docs/discord-permissions-reference.md § Layer 2`)           |
+| `Manage Roles`    | 28  | `0x10000000` | Toggle `Attack Day N` role membership when siege-web pushes assignment changes (Epic 2.6, A2 PR #68; role-toggle A4 #64) |
+| `Create Events`   | 44  | `0x100000000000` | Autonomous tank-week creation; cancel of bot-created events (`docs/discord-permissions-reference.md § Layer 2`) |
+| **Total**         |     | **`0x10001000C800`**                 | Decimal: **`17592454531072`** |
+
+> The combined integer `17592454531072` is the authoritative conservative install bitfield for
+> mom-bot. It equals `Send Messages | Embed Links | Attach Files | Manage Roles | Create Events`.
+> Do not hand-compute this — use the Developer Portal → OAuth2 → URL Generator to tick the
+> permissions and let Discord compute the integer, then verify it matches `17592454531072`.
+
+`MANAGE_ROLES` alone is `1 << 28` — decimal `268435456`, hex `0x10000000`. The full bitfield
+`17592454531072` is a superset that includes `MANAGE_ROLES`. If the installed grant's
+`permissions=` integer equals or exceeds `17592454531072`, `MANAGE_ROLES` is included.
+
+The full permissions reference (six configuration layers, scopes, intents, role-ordering caveat,
+and install URL persistence) is at `docs/discord-permissions-reference.md`.
+
+[^perms-ref]: Discord API — Permissions: https://docs.discord.com/developers/topics/permissions (fetched 2026-05-08 for the original reference doc; bit assignments are stable and version-independent for the permissions listed here).
+
+#### Verifying the current grant
+
+Two complementary methods — use either or both.
+
+**Method A — Discord Developer Portal (pre-deploy, definitive)**
+
+1. Open [Discord Developer Portal](https://discord.com/developers/applications) and select the
+   mom-bot application.
+2. In the left sidebar, click **Installation**.
+3. Under **Default Install Settings → Guild Install**, check **Permissions**. The picker should
+   show `Send Messages`, `Embed Links`, `Attach Files`, `Manage Roles`, and `Create Events` all
+   ticked.
+4. Alternatively, scroll to the **Install Link** field at the top of the Installation tab and
+   copy it. If the link contains `?permissions=` as a query parameter, decode that integer
+   (it must be `17592454531072` or a superset). The Installation-tab link format stores
+   permissions server-side rather than in the URL itself, so you may need to use the
+   **URL Generator** (same portal, left sidebar) to generate an equivalent explicit URL for
+   comparison — see `docs/discord-permissions-reference.md § Pinned install configuration`.
+
+**Method B — Live guild inspection (post-install, immediate)**
+
+1. In the target Discord server, open **Server Settings → Roles**.
+2. Find the mom-bot integration role (it is created automatically when the bot is invited).
+3. Click the role and inspect the **Permissions** tab. `Manage Roles` must be ticked.
+4. Alternatively, open **Server Settings → Integrations → mom-bot**. Discord shows the scopes
+   and permissions the bot was granted at the time of the last invite. If `Manage Roles` is
+   absent here, the bot was invited with an older or incomplete bitfield — re-invite using the
+   corrected URL below.
+
+#### Corrected re-invite URL (if `MANAGE_ROLES` is missing)
+
+If the live guild inspection shows `Manage Roles` is not ticked, re-invite the bot using:
+
+```
+https://discord.com/oauth2/authorize?client_id=<APPLICATION_ID>&scope=bot%20applications.commands&permissions=17592454531072
+```
+
+Replace `<APPLICATION_ID>` with the mom-bot application ID found in the Discord Developer Portal
+under **General Information → APPLICATION ID**. For the deployed application, this value is
+recorded in `docs/discord-permissions-reference.md § Pinned install configuration`.
+
+You can also use the Developer Portal's **Installation tab** to re-save the permissions and
+then use the Install Link from that tab — see `docs/discord-permissions-reference.md § Saving /
+persisting the install configuration` for the recommended workflow.
+
+#### Admin re-install procedure
+
+Re-inviting the bot with a corrected bitfield is safe:
+
+- **Members keep their roles.** Re-inviting the same bot application (same APPLICATION_ID) does
+  not remove roles from any guild members. Role assignments are stored by Discord on the member,
+  not on the bot's grant.
+- **The bot stays in the server during re-invite.** The bot is not kicked when you start the
+  re-invite flow. The old grant remains active until the new invite is authorized by a server
+  administrator with the **Manage Server** permission.
+- **If the re-invite is abandoned mid-flow**, the old grant stays in place. There is no
+  partial-grant state — authorization is atomic. The bot continues operating under the prior
+  permissions until the re-invite is completed.
+- **Only one guild administrator needs to authorize.** The admin who clicks the invite link
+  and clicks **Authorize** in the OAuth2 consent screen is the only person whose action is
+  required. Other admins do not need to take any action.
+- **After re-invite**, verify the updated grant using Method B above before proceeding with the
+  remaining pre-flight checklist items.
 
 ### `day_role_map` table seeded
 
