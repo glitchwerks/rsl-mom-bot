@@ -188,34 +188,71 @@ def test_dev_env_uses_azure_cli_credential(
 
 
 # ---------------------------------------------------------------------------
-# Test 6 — MOM_BOT_ENV=prod yields ManagedIdentityCredential
+# Test 6 — MOM_BOT_ENV=prod yields ManagedIdentityCredential with client_id
 # ---------------------------------------------------------------------------
+
+_FAKE_CLIENT_ID = "00000000-0000-0000-0000-000000000000"
 
 
 def test_prod_env_uses_managed_identity_credential(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """_build_credential() must return ManagedIdentityCredential when MOM_BOT_ENV=prod.
+    """_build_credential() must call ManagedIdentityCredential(client_id=…) in prod.
 
     In production the Container App has a user-assigned managed identity
     (mi-mom-bot) with Key Vault Secrets User on kv-mombot-eastus2.
-    ManagedIdentityCredential uses the IMDS endpoint on the Container App
-    host where it is always reachable, avoiding the az CLI entirely.
+    ACA's IMDS endpoint requires an explicit ``client_id`` even when only one
+    UserAssigned MI is attached — the single-MI shortcut is not honoured.
+
+    We patch ``azure.identity.ManagedIdentityCredential`` to a mock so we can
+    assert the exact constructor call without needing an IMDS endpoint.
+    ``AZURE_CLIENT_ID`` must be set in env; the module reads it via
+    ``os.environ["AZURE_CLIENT_ID"]`` (hard-fail if absent).
     """
     import importlib
     import sys
-
-    from azure.identity import ManagedIdentityCredential
+    from unittest.mock import MagicMock, patch
 
     monkeypatch.setenv("MOM_BOT_ENV", "prod")
+    monkeypatch.setenv("AZURE_CLIENT_ID", _FAKE_CLIENT_ID)
     sys.modules.pop("mom_bot.config", None)
     import mom_bot.config as config_module
 
     importlib.reload(config_module)
 
-    credential = config_module._build_credential()
+    mock_mic = MagicMock()
+    with patch("mom_bot.config.ManagedIdentityCredential", mock_mic):
+        config_module._build_credential()
 
-    assert isinstance(credential, ManagedIdentityCredential)
+    mock_mic.assert_called_once_with(client_id=_FAKE_CLIENT_ID)
+
+
+# ---------------------------------------------------------------------------
+# Test 6b — MOM_BOT_ENV=prod without AZURE_CLIENT_ID raises KeyError
+# ---------------------------------------------------------------------------
+
+
+def test_prod_env_missing_client_id_raises_key_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """_build_credential() must raise KeyError if AZURE_CLIENT_ID is unset in prod.
+
+    Using ``os.environ["AZURE_CLIENT_ID"]`` (not ``.get()``) ensures the bot
+    fails hard at startup rather than constructing a credential that will auth
+    against the wrong identity or fail silently at first KV call.
+    """
+    import importlib
+    import sys
+
+    monkeypatch.setenv("MOM_BOT_ENV", "prod")
+    monkeypatch.delenv("AZURE_CLIENT_ID", raising=False)
+    sys.modules.pop("mom_bot.config", None)
+    import mom_bot.config as config_module
+
+    importlib.reload(config_module)
+
+    with pytest.raises(KeyError):
+        config_module._build_credential()
 
 
 # ---------------------------------------------------------------------------
