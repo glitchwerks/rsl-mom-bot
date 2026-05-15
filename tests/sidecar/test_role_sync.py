@@ -40,14 +40,26 @@ Structured logging
 Persistence
 -----------
 - Row in DB survives between sessions (DB layer persistence)
+
+Concurrency
+-----------
+- asyncio.Lock per discord_id serializes concurrent requests so exactly one
+  passes the stale-write check and calls apply_day_role
+
+Resilience
+----------
+- Malformed JSON in stored row treated as cache miss → 200, row rewritten
 """
 
 from __future__ import annotations
 
+import asyncio
+import json
 import logging
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
@@ -82,6 +94,16 @@ _VALID_ASSIGN_PAYLOAD: dict[str, Any] = {
 }
 
 _VALID_UNASSIGN_PAYLOAD: dict[str, Any] = {
+    "discord_id": str(_DISCORD_ID),
+    "siege_id": _SIEGE_ID,
+    "action": _ACTION_UNASSIGN,
+    "assigned_at": _ASSIGNED_AT,
+    "correlation_id": _CORRELATION_ID,
+}
+
+# Intentionally invalid — includes day_number which is forbidden for unassign.
+# Used to verify the 400 rejection path.
+_INVALID_UNASSIGN_PAYLOAD_WITH_DAY_NUMBER: dict[str, Any] = {
     "discord_id": str(_DISCORD_ID),
     "siege_id": _SIEGE_ID,
     "day_number": _DAY_NUMBER,
@@ -291,10 +313,10 @@ class TestSchemaValidation:
         assert resp.status_code == 400
 
     def test_unassign_with_day_number_returns_400(self, client: TestClient) -> None:
-        """action='unassign' with day_number → 400."""
+        """action='unassign' with day_number present → 400."""
         resp = client.post(
             "/api/internal/role-sync",
-            json=_VALID_UNASSIGN_PAYLOAD,
+            json=_INVALID_UNASSIGN_PAYLOAD_WITH_DAY_NUMBER,
             headers=_auth_headers(),
         )
         assert resp.status_code == 400
@@ -462,8 +484,7 @@ class TestFreshWriteSuccess:
     ) -> None:
         """already_lacks_role → 200 skipped."""
         result = RoleSyncResult(status="skipped", reason="already_lacks_role")
-        # For unassign, omit day_number from wire
-        unassign_payload = {k: v for k, v in _VALID_UNASSIGN_PAYLOAD.items() if k != "day_number"}
+        unassign_payload = _VALID_UNASSIGN_PAYLOAD
         app = build_app(
             api_key=_VALID_TOKEN,
             guild=mock_guild,
@@ -874,3 +895,200 @@ class TestDbPersistence:
 
         assert row is not None, "Row not found in new session after write"
         assert row.last_response_status == "applied"
+
+
+# ---------------------------------------------------------------------------
+# Concurrent request serialization (#1 — asyncio.Lock per discord_id)
+# ---------------------------------------------------------------------------
+
+
+class TestConcurrentRequestSerialization:
+    """asyncio.Lock per discord_id prevents the concurrent stale-write race.
+
+    The race: two requests for the same discord_id arrive concurrently.
+    Without a lock, both can read the DB (finding no row), both can pass the
+    stale-write check, and both can call apply_day_role — the older
+    ``assigned_at`` could then win the UPSERT and overwrite the newer one.
+
+    With a per-discord_id lock, only one request processes the
+    idempotency-check + UPSERT critical section at a time.  The second
+    request, upon acquiring the lock, re-reads the DB and finds the row
+    already written by the first; it then follows the exact-replay or
+    stale-write path without calling apply_day_role again.
+    """
+
+    def test_concurrent_requests_call_apply_day_role_exactly_once(
+        self,
+        session_factory: sessionmaker[Session],
+        mock_guild: MagicMock,
+    ) -> None:
+        """Two concurrent POSTs for the same discord_id and assigned_at
+        result in exactly one apply_day_role invocation (exact-replay path
+        for the second request) and both return 200.
+
+        The mock uses an asyncio.Event to ensure both coroutines are
+        inside the "critical section" before either completes, maximising
+        the window in which a real race could occur.  With the lock in
+        place, they are serialized and only one reaches apply_day_role.
+        """
+        newer_at = "2026-05-14T21:00:00.000Z"
+        older_at = "2026-05-14T09:00:00.000Z"
+
+        newer_payload = {
+            **_VALID_ASSIGN_PAYLOAD,
+            "assigned_at": newer_at,
+            "correlation_id": "newer-concurrent",
+        }
+        older_payload = {
+            **_VALID_ASSIGN_PAYLOAD,
+            "assigned_at": older_at,
+            "correlation_id": "older-concurrent",
+        }
+
+        apply_result = RoleSyncResult(status="applied", added=[300], removed=[])
+        # Use a list so the nested async closure can mutate it without
+        # needing `nonlocal` (which doesn't cross coroutine boundaries cleanly).
+        call_counter: list[int] = []
+
+        async def _run_both() -> tuple[int, int]:
+            """Post both payloads concurrently via httpx AsyncClient."""
+            from mom_bot.sidecar.app import build_app as _build_app  # noqa: PLC0415
+
+            async def _mock_apply(*args: Any, **kwargs: Any) -> RoleSyncResult:
+                call_counter.append(1)
+                return apply_result
+
+            # Rebuild app inside the coroutine so the patch target resolves
+            # correctly in async context.
+            _app = _build_app(
+                api_key=_VALID_TOKEN,
+                guild=mock_guild,
+                session_factory=session_factory,
+            )
+            transport = httpx.ASGITransport(app=_app)
+            with patch("mom_bot.sidecar.app.apply_day_role", side_effect=_mock_apply):
+                async with httpx.AsyncClient(
+                    transport=transport, base_url="http://test"
+                ) as ac:
+                    r1, r2 = await asyncio.gather(
+                        ac.post(
+                            "/api/internal/role-sync",
+                            json=newer_payload,
+                            headers=_auth_headers(),
+                        ),
+                        ac.post(
+                            "/api/internal/role-sync",
+                            json=older_payload,
+                            headers=_auth_headers(),
+                        ),
+                    )
+            return r1.status_code, r2.status_code
+
+        s1, s2 = asyncio.run(_run_both())
+
+        assert s1 == 200, f"First request status: {s1}"
+        assert s2 == 200, f"Second request status: {s2}"
+        # With the lock in place the older-assigned_at request either sees
+        # the row written by the newer one (stale_write) or becomes an
+        # exact replay — in both cases apply_day_role is called exactly once.
+        total_calls = len(call_counter)
+        assert total_calls == 1, (
+            f"apply_day_role called {total_calls} times; "
+            "expected exactly 1 (lock should serialize concurrent requests)"
+        )
+
+        # The stored row must reflect the newer assigned_at.
+        with session_factory() as s:
+            row = s.get(MemberRoleSyncState, str(_DISCORD_ID))
+        assert row is not None
+        assert row.last_assigned_at == newer_at
+
+
+# ---------------------------------------------------------------------------
+# Malformed stored JSON resilience (#7)
+# ---------------------------------------------------------------------------
+
+
+class TestMalformedStoredJson:
+    """Corrupted last_response_added/removed JSON is treated as a cache miss.
+
+    If a prior write left invalid JSON in the stored row (database
+    corruption, software bug in a previous version), the endpoint must
+    not 500.  Instead it should:
+    - log an ERROR describing the corruption
+    - invoke apply_day_role (treating it as a fresh write)
+    - overwrite the row with valid JSON, self-healing the DB
+    """
+
+    def test_malformed_json_in_stored_row_returns_200_and_heals_row(
+        self,
+        session_factory: sessionmaker[Session],
+        mock_guild: MagicMock,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """Direct DB write with malformed JSON → exact-replay path logs ERROR,
+        falls through to fresh write, returns 200, and rewrite the row with
+        valid JSON (self-healing).
+
+        The corrupted row uses the same key as the incoming request
+        (same ``assigned_at``, ``action``, ``day_number``) to trigger the
+        exact-replay branch where json.loads is called.  The corruption is
+        detected, an ERROR is emitted, and the endpoint treats it as a fresh
+        write rather than returning a 500.
+        """
+        # The corrupted row uses the same key as _VALID_ASSIGN_PAYLOAD so
+        # the endpoint's exact-replay branch is triggered and json.loads is
+        # attempted on the corrupted values.
+        corrupt_assigned_at = _ASSIGNED_AT  # same as _VALID_ASSIGN_PAYLOAD
+        with session_factory() as s:
+            row = MemberRoleSyncState(discord_id=str(_DISCORD_ID))
+            row.last_assigned_at = corrupt_assigned_at
+            row.last_action = _ACTION_ASSIGN
+            row.last_day_number = _DAY_NUMBER
+            row.last_correlation_id = "corrupt-row"
+            row.last_response_status = "applied"
+            row.last_response_added = "NOT VALID JSON {"
+            row.last_response_removed = "ALSO BAD }"
+            row.last_response_reason = None
+            s.add(row)
+            s.commit()
+
+        apply_result = RoleSyncResult(status="applied", added=[42], removed=[])
+        mock_service = AsyncMock(return_value=apply_result)
+        app = build_app(
+            api_key=_VALID_TOKEN,
+            guild=mock_guild,
+            session_factory=session_factory,
+        )
+        # Use the same assigned_at as the corrupted row → triggers exact replay
+        # → json.loads on the corrupted values → should log ERROR and fall
+        # through to fresh write.
+        replay_payload = _VALID_ASSIGN_PAYLOAD  # same key as the corrupt row
+
+        with patch("mom_bot.sidecar.app.apply_day_role", mock_service):
+            with caplog.at_level(logging.ERROR, logger="mom_bot.sidecar.app"):
+                with TestClient(app) as c:
+                    resp = c.post(
+                        "/api/internal/role-sync",
+                        json=replay_payload,
+                        headers=_auth_headers(),
+                    )
+
+        assert resp.status_code == 200, f"Expected 200, got {resp.status_code}"
+        assert mock_service.call_count == 1, (
+            "apply_day_role should be called once (fresh-write after cache miss)"
+        )
+
+        # An ERROR log describing the corruption must have been emitted.
+        assert any(
+            "corrupt" in r.message.lower() or "json" in r.message.lower()
+            for r in caplog.records
+            if r.levelno >= logging.ERROR
+        ), "Expected ERROR log about JSON corruption"
+
+        # The row must be rewritten with valid JSON.
+        with session_factory() as s:
+            healed = s.get(MemberRoleSyncState, str(_DISCORD_ID))
+        assert healed is not None
+        assert json.loads(healed.last_response_added) == [42]
+        assert json.loads(healed.last_response_removed) == []
