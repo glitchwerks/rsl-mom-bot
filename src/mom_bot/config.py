@@ -112,14 +112,28 @@ class ConfigError(Exception):
 def _build_credential() -> TokenCredential:
     """Build the right Azure credential for the current environment.
 
-    For ``MOM_BOT_ENV=prod``, returns :class:`~azure.identity.ManagedIdentityCredential`
-    — the Container App has a user-assigned managed identity (``mi-mom-bot``)
-    that already has *Key Vault Secrets User* on ``kv-mombot-eastus2``.
+    For ``MOM_BOT_ENV=prod``, returns
+    :class:`~azure.identity.ManagedIdentityCredential` constructed with the
+    ``client_id`` read from ``os.environ["AZURE_CLIENT_ID"]``.  The value is
+    supplied by Bicep from ``mi-mom-bot.clientId`` via the ``AZURE_CLIENT_ID``
+    container env var.
+
+    **Why explicit ``client_id``?**  ACA's IMDS endpoint does not auto-select
+    the sole UserAssigned MI — the SDK requires an explicit ``client_id`` hint
+    even when only one identity is attached.  Omitting it causes the SDK to
+    attempt a system-assigned principal (which has no role assignments) and
+    receive a 403 from Key Vault.  See issue #84 for the diagnosis.
+
+    **Hard-fail intent:** ``os.environ["AZURE_CLIENT_ID"]`` (not ``.get()``)
+    is intentional.  If the env var is absent in prod the bot raises
+    ``KeyError`` at startup, which surfaces the misconfiguration immediately
+    rather than silently building a credential that will auth against the wrong
+    identity and fail only on the first Key Vault call.
 
     For ``MOM_BOT_ENV=dev`` (the default), returns
     :class:`~azure.identity.AzureCliCredential` — the developer has
     ``az login``'d locally and self-granted *Key Vault Secrets User* on the
-    same vault.
+    same vault.  ``AZURE_CLIENT_ID`` is not read in this branch.
 
     ``DefaultAzureCredential`` is deliberately avoided here:
 
@@ -132,9 +146,13 @@ def _build_credential() -> TokenCredential:
     Returns:
         A :class:`~azure.core.credentials.TokenCredential` appropriate for the
         current environment.
+
+    Raises:
+        KeyError: In ``prod`` if ``AZURE_CLIENT_ID`` is not set in the
+            environment.  This is intentional — fail hard at startup.
     """
     if _ENV == "prod":
-        return ManagedIdentityCredential()
+        return ManagedIdentityCredential(client_id=os.environ["AZURE_CLIENT_ID"])
     return AzureCliCredential()
 
 

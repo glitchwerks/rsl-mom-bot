@@ -90,6 +90,7 @@ module containerApp 'modules/containerapp.bicep' = {
     containerAppsEnvironmentName: containerAppsEnvironmentName
     containerAppName: containerAppName
     managedIdentityId: identity.outputs.id
+    managedIdentityClientId: identity.outputs.clientId
     containerImage: containerImage
     keyVaultName: keyVaultName
     ghaServicePrincipalObjectId: ghaServicePrincipalObjectId

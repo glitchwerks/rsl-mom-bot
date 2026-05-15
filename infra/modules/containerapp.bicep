@@ -8,10 +8,12 @@
 //   /api/internal/role-sync endpoint (Epic 2.6) will re-enable ingress when it
 //   lands; keeping it off now is smallest blast radius.
 // - User-assigned MI only (mi-mom-bot) — attached as the sole identity so
-//   DefaultAzureCredential unambiguously selects it for Key Vault access.
+//   ManagedIdentityCredential unambiguously selects it for Key Vault access.
 //   SystemAssigned was previously also attached but caused the SDK to default
 //   to the empty SystemAssigned principal (no role assignments) → KV 403s.
-//   See #81 for the diagnosis.
+//   See #81 for the diagnosis. AZURE_CLIENT_ID is sourced from
+//   mi-mom-bot.clientId and is required by ManagedIdentityCredential; the
+//   ACA IMDS endpoint does not auto-select the sole UserAssigned identity.
 // - Single replica (scale 0-1) — SQLite + WAL requires single writer.
 //   See framework plan § Confirmed design decisions.
 //
@@ -31,6 +33,9 @@ param containerAppName string
 
 @description('Resource ID of the user-assigned managed identity mi-mom-bot.')
 param managedIdentityId string
+
+@description('Client ID of the user-assigned managed identity — supplied to the container as AZURE_CLIENT_ID so ManagedIdentityCredential can select it via the SDK env-var convention.')
+param managedIdentityClientId string
 
 @description('Container image reference (ghcr.io/glitchwerks/mom-bot:<sha>).')
 param containerImage string
@@ -101,6 +106,10 @@ resource ca 'Microsoft.App/containerApps@2024-03-01' = {
             {
               name: 'MOM_BOT_KEY_VAULT_NAME'
               value: keyVaultName
+            }
+            {
+              name: 'AZURE_CLIENT_ID'
+              value: managedIdentityClientId
             }
           ]
           // Exec liveness probe — confirms the reminder scheduler loop is
