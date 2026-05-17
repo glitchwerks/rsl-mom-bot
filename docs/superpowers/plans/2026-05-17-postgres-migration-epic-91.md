@@ -95,7 +95,7 @@ skills_relevant:
 - AAD admin can be a user-assigned managed identity directly per [Entra concepts](https://learn.microsoft.com/en-us/azure/postgresql/security/security-entra-concepts) (fetched 2026-05-16) §§ "Differences between a PostgreSQL administrator and a Microsoft Entra administrator" ("The Microsoft Entra administrator can be a Microsoft Entra user, Microsoft Entra group, service principal, or managed identity").
 - Password-in-KV would add a rotation burden, a leak surface, and a secret to manage in `infra/aad-runbook.md` — for no functional gain.
 
-**Trade-off / known sharp edge:** Alembic CLI run from the GHA runner also needs a token. The GHA service principal (`mom-bot-gha`) must also be added as an Entra admin (multiple Entra admins are supported per the same FAQ: "you can set as many Microsoft Entra administrators as you want"). The deploy workflow uses `az account get-access-token --resource-type oss-rdbms` to mint the token and injects it as `PGPASSWORD`. Verified working end-to-end against a real Flexible Server in spike #101 (`docs/spike/2026-05-17-postgres-aad-findings.md` § Charge 2).
+**Trade-off / known sharp edge:** Alembic CLI run from the GHA runner also needs a token. The GHA service principal (`mom-bot-gha`) must also be added as an Entra admin (multiple Entra admins are supported per the same FAQ: "you can set as many Microsoft Entra administrators as you want"). The deploy workflow uses `az account get-access-token --resource https://ossrdbms-aad.database.windows.net` to mint the token and injects it as `PGPASSWORD`. Verified working end-to-end against a real Flexible Server in spike #101 (`docs/spike/2026-05-17-postgres-aad-findings.md` § Charge 2).
 
 **Citation:** [Microsoft Entra Authentication for PostgreSQL](https://learn.microsoft.com/en-us/azure/postgresql/security/security-entra-concepts) (fetched 2026-05-16). PR #84, PR #86 (`mi-mom-bot` + `AZURE_CLIENT_ID` pattern). Spike #101 `docs/spike/2026-05-17-postgres-aad-findings.md` § Charge 2 (end-to-end verification), § Charge 3 (86-min TTL measurement).
 
@@ -142,7 +142,7 @@ No dual-write infrastructure, no migration script, no cutover dance. **Skip the 
 - `src/mom_bot/main.py` — replace `_build_session_factory` with import of `build_session_factory` from `mom_bot.db` (which lives in `db/__init__.py` alongside `Base`); remove `run_migrations()` (lines 76-105) and its call site in `setup_hook` (line 206); remove the alembic imports at lines 51-52 (`from alembic.command import upgrade as alembic_upgrade`, `from alembic.config import Config as AlembicConfig`); remove `_ALEMBIC_INI` constant (line 73).
 - `pyproject.toml` — add `psycopg[binary]>=3.2,<4`, pin `sqlalchemy>=2,<3`, pin `alembic>=1.13,<2` to `dependencies`; materialize `uv.lock` into the image (see dep-pinning decision below).
 - `migrations/versions/0002_reminders_schema.py` — **rewrite the `ck_fire_time_no_seconds` CHECK constraint** to use `EXTRACT(SECOND FROM fire_time_utc) = 0` (dialect-portable: works on both SQLite ≥ 3.38 and Postgres). This is a destructive edit to a committed migration — acceptable because #91 is explicitly fresh-Postgres-no-data-migration. See Phase 2 for rationale.
-- `.github/workflows/deploy.yml` — add steps: install Python+`uv`+`psycopg[binary]`+`alembic`, mint AAD token via `az account get-access-token --resource-type oss-rdbms`, add transient firewall rule for runner IP, run `alembic upgrade head`, remove firewall rule. Pin `az` CLI ≥ 2.86 in the runner prereq check.
+- `.github/workflows/deploy.yml` — add steps: install Python+`uv`+`psycopg[binary]`+`alembic`, mint AAD token via `az account get-access-token --resource https://ossrdbms-aad.database.windows.net`, add transient firewall rule for runner IP, run `alembic upgrade head`, remove firewall rule. Pin `az` CLI ≥ 2.86 in the runner prereq check.
 - `README.md` — update the Epic 0 / Alembic section to reflect Postgres prod + SQLite local-dev.
 - `docs/secrets-inventory.md` — update `prod-database-url` description (passwordless DSN, not SQLite path).
 - `Dockerfile` — remove `COPY alembic.ini ./` and `COPY migrations/ ./migrations/` lines (lines 11-12); switch `pip install` to `uv sync --frozen --no-dev` after adding `COPY uv.lock` (dep-pinning Option A).
@@ -413,7 +413,7 @@ Expected: deployment succeeds in 5–10 minutes (Postgres provisioning is the lo
 - [ ] **Step 4: Smoke-test from operator laptop**
 
 ```powershell
-$token = az account get-access-token --resource-type oss-rdbms --query accessToken -o tsv
+$token = az account get-access-token --resource https://ossrdbms-aad.database.windows.net --query accessToken -o tsv
 $env:PGPASSWORD = $token
 $fqdn = az postgres flexible-server show -g mom-bot --name pg-mombot-XXXXXX --query fullyQualifiedDomainName -o tsv
 psql "host=$fqdn port=5432 dbname=mom_bot user=<your-aad-upn> sslmode=require" -c "select version();"
@@ -557,7 +557,7 @@ Expected: PASS — the edited migration runs against SQLite using `EXTRACT()` (o
 - [ ] **Step 4: Run Postgres-side migration from operator laptop**
 
 ```powershell
-$token = az account get-access-token --resource-type oss-rdbms --query accessToken -o tsv
+$token = az account get-access-token --resource https://ossrdbms-aad.database.windows.net --query accessToken -o tsv
 $env:PGPASSWORD = $token
 $fqdn = az postgres flexible-server show -g mom-bot --name pg-mombot-XXXXXX --query fullyQualifiedDomainName -o tsv
 $env:MOM_BOT_DATABASE_URL = "postgresql+psycopg://<your-aad-upn>@${fqdn}:5432/mom_bot?sslmode=require"
@@ -853,9 +853,27 @@ could be stale and the server would return ``FATAL: token expired`` on the next
 query. Document any session-lifetime change as a re-evaluation trigger for this
 design. Source: R9 in the risk register; Phase 3 decision.
 
-Connection-pool sizing: ``pool_size=10, max_overflow=5`` (15 connections max).
-The B1ms tier supports ~50 max connections; these values are empirical for the
-bot's session-per-tick pattern with one app instance (R9). Well under ceiling.
+Connection-pool sizing: ``pool_size=5, max_overflow=5`` (10 connections max).
+B1ms user-accessible ceiling is 35 connections (Azure reserves 15 of the ~50
+hard ceiling — see MS Learn [Postgres limits](https://learn.microsoft.com/azure/postgresql/configure-maintain/concepts-limits#maximum-connections)
+(fetched 2026-05-17)). Deploy-window worst-case: old revision pool (10) + new
+revision pool (10) + CI alembic conn (1) + operator psql (1) = 22/35. These
+values are empirical for the bot's session-per-tick pattern with one app
+instance (R9); conservative ceiling chosen to leave headroom during deploy
+windows on the 35-cap B1ms tier.
+
+``pool_size=5`` is empirically generous for the bot's session-per-tick pattern
+— tick cadence is minutes-to-hours, sessions are returned to the pool well
+before the next tick. Conservative ceiling chosen to leave headroom during
+deploy windows on the 35-cap B1ms tier.
+
+``pool_pre_ping=True`` is the pessimistic-disconnect-handling pattern:
+SQLAlchemy issues a cheap ``SELECT 1`` on every checkout and transparently
+reconnects if the connection is dead. This catches token expiry, server
+failover, and network flaps — strictly more robust than ``pool_recycle``
+alone, which only fires on the timer. Cost: one round-trip per checkout
+(negligible for session-per-tick). Reference: SQLAlchemy docs
+`Disconnect Handling - Pessimistic <https://docs.sqlalchemy.org/en/20/core/pooling.html#disconnect-handling-pessimistic>`_.
 
 For non-Postgres URLs (sqlite, used in unit tests and local dev), the hook is
 not registered and pool_recycle / pool_size are not set.
@@ -899,7 +917,8 @@ def build_session_factory(
             db_url,
             echo=False,
             pool_recycle=_POOL_RECYCLE_SECONDS,
-            pool_size=10,
+            pool_pre_ping=True,
+            pool_size=5,
             max_overflow=5,
         )
         client_id = aad_client_id or os.environ.get("AZURE_CLIENT_ID")
@@ -932,7 +951,7 @@ Expected: both tests PASS.
 
 ```bash
 git add src/mom_bot/db/__init__.py tests/test_db_token_injection.py
-git commit -m "feat(db): AAD-token engine factory with pool_recycle=4800, pool_size=10 for Postgres (#91)"
+git commit -m "feat(db): AAD-token engine factory with pool_recycle=4800, pool_size=5, pool_pre_ping for Postgres (#91)"
 ```
 
 #### Task 3.2: Swap `main.py` to use new factory; remove `run_migrations`
@@ -1094,7 +1113,8 @@ gh pr create --draft --title "feat(db): AAD-token engine + remove startup migrat
 - [ ] Container image still builds (`docker build .`).
 - [ ] `Dockerfile` no longer has `COPY alembic.ini` or `COPY migrations/` lines.
 - [ ] `pool_recycle=4800` is present in the SQLAlchemy engine config for Postgres URLs.
-- [ ] `pool_size=10, max_overflow=5` are set on the engine for Postgres URLs.
+- [ ] `pool_pre_ping=True` is set on the engine for Postgres URLs.
+- [ ] `pool_size=5, max_overflow=5` are set on the engine for Postgres URLs.
 
 ---
 
@@ -1176,7 +1196,7 @@ Insert the following steps after `Verify image exists in GHCR` (around line 60) 
             postgresql+psycopg://mom-bot-gha@${{ steps.pg.outputs.fqdn }}:5432/mom_bot?sslmode=require
         run: |
           PGPASSWORD=$(az account get-access-token \
-            --resource-type oss-rdbms \
+            --resource https://ossrdbms-aad.database.windows.net \
             --query accessToken -o tsv)
           export PGPASSWORD
           uv run alembic upgrade head
@@ -1194,6 +1214,8 @@ Insert the following steps after `Verify image exists in GHCR` (around line 60) 
 **Note on `PGPASSWORD` injection:** PGPASSWORD-with-AAD-token through psycopg3 against Flexible Server confirmed working in spike #101. Token format: 2234-char JWT, resource `https://ossrdbms-aad.database.windows.net`. Source: `docs/spike/2026-05-17-postgres-aad-findings.md` § Charge 2 (VERIFIED).
 
 **Note on GHA OIDC federation (Charge 12):** The mini-spike workflow (`mini-spike-postgres-oidc.yml`) was run as a Phase 3 deliverable (Task 3.3). If it passed, Charge 12 is verified and this note is informational only. If Phase 4 is being executed and Charge 12 is still marked `unverified:` in § 10, **stop and run the mini-spike first** — merging Phase 4 without verifying OIDC token acquisition means the `alembic upgrade head` step will fail on the first deploy run with no fallback path.
+
+**Note on alternative migration patterns (reach option):** Azure Container Apps Jobs is a viable alternative pattern if migrations grow. Container Apps Jobs is the platform's Kubernetes-Job equivalent; a separate Bicep resource + its own UAMI grant could host the migration step without coupling it to the CI pipeline. Adds two moving parts (resource + identity); rejected for #91 in favor of the simpler CI-side approach. Re-evaluate if migration frequency or duration outgrows a single CI step.
 
 - [ ] **Step 2: Lint the workflow**
 
@@ -1423,8 +1445,10 @@ EOF
 | R6 | Container App egress IP not covered by firewall rules | Low → MITIGATED (Phase 1) | High (bot can't connect) | Mitigated proactively in Phase 1 Task 1.4: the CAE static egress IP is looked up via `az containerapp env show -n cae-mom-bot -g mom-bot --query 'properties.staticIp' -o tsv` and emitted as a named firewall rule `allow-cae-egress` in `postgres.bicep`. Phase 4 verification: confirm `allow-cae-egress` rule still matches the current `properties.staticIp` value (the IP is static but worth a sanity check at cutover time). |
 | R7 | Microsoft.Graph provider registration required for `administrators` resource | RESOLVED — NOT APPLICABLE | Verified 2026-05-17: `az provider show -n Microsoft.Graph` returns `InvalidResourceNamespace` — Microsoft.Graph is not a registerable Azure resource provider. The `administrators` resource does not require it. No registration step needed. |
 | R8 | AAD admin propagation delay blocks first migration run | Low (bounded) | Low | Spike #101 observed <60 s end-to-end (docs/spike/2026-05-17-postgres-aad-findings.md § Bonus Finding 5). Phase 4 deploy workflow includes a `sleep 60` after Entra admin assignment. Risk remains on the register but the stop-loss narrows from "minutes-to-5min" to ≤ 60 s observed ceiling. |
-| R9 | Connection pool exhaustion — B1ms supports ~50 max connections | Low | Medium | Configure `pool_size=10, max_overflow=5` in the SQLAlchemy engine config (Phase 3 deliverable — implemented in `src/mom_bot/db/__init__.py` `build_session_factory`). These values are empirical for the bot's session-per-tick pattern with one app instance. Well under the B1ms connection ceiling. |
+| R9 | Connection pool exhaustion — B1ms user-accessible ceiling is 35 connections (Azure reserves 15) | Low | Medium | Configure `pool_size=5, max_overflow=5` (10 total connections) in the SQLAlchemy engine config (Phase 3 deliverable — implemented in `src/mom_bot/db/__init__.py` `build_session_factory`). B1ms user-accessible ceiling is 35 (Azure reserves 15 — see MS Learn [Postgres limits](https://learn.microsoft.com/azure/postgresql/configure-maintain/concepts-limits#maximum-connections), fetched 2026-05-17). Deploy-window worst-case: old revision pool (10) + new revision pool (10) + CI alembic conn (1) + operator psql (1) = 22/35. Halved vs the prior `pool_size=10` design. |
 | R10 | UAMI display-name binding rule — Postgres role name must match Entra admin `principalName` | Low (easy to misconfigure) | Medium (auth failure at connect) | Phase 1 documentation item: the `principalName` set in `postgres.bicep` must exactly match the UAMI display name. Verify before Phase 1 deploy. Cite: [Microsoft Entra auth for PostgreSQL](https://learn.microsoft.com/en-us/azure/postgresql/security/security-entra-concepts) (fetched 2026-05-16). |
+| R11 | CAE `staticIp` is not contractually static | Low (Azure rotates rarely) | High (bot stops connecting; symptoms = `pg_hba.conf` reject on every tick) | **Detection:** alert on bot logs containing `pg_hba.conf reject` or `no pg_hba.conf entry` (Phase 4 Task 4.x — wire into existing log monitor). **Remediation:** re-run `az containerapp env show -n cae-mom-bot -g mom-bot --query 'properties.staticIp' -o tsv`; update `caeEgressIp` bicepparam; `az deployment sub create` to re-apply. **Long-term:** workload-profiles CAE + NAT gateway is the only contractually-static-egress path per MS Learn ([Container Apps networking — outbound IP addresses](https://learn.microsoft.com/azure/container-apps/networking#http-edge-proxy-behavior), fetched 2026-05-17). Out of scope here — CAE network type is immutable, same constraint that rejected private endpoint in § 2 Q1. **Source:** devops review of plan-revision-2 (2026-05-17, CONCERN-1). |
+| R12 | `mom-bot-gha` holds both Subscription Contributor AND Postgres Entra admin on one federated credential | Low (requires workflow-yaml compromise on `main`) | Critical (full subscription mutations + server-wide DDL/DML on Postgres) | **Accepted-known for #91** — splitting now adds two SPs, two FICs, two GHA environments, two `azure/login` blocks; orthogonal to the migration epic. **Tracked separately:** issue #103 (glitchwerks/mom-bot#103) — split into `mom-bot-gha-deploy` + `mom-bot-gha-migrate` gated by GHA environments (`prod-deploy` / `prod-migrate`). **Interim hardening:** protect `main` branch with required reviews; require all workflow edits to flow through PRs (existing). No direct pushes from non-author identities. **Source:** devops review of plan-revision-2 (2026-05-17, CONCERN-3). |
 
 ---
 
@@ -1555,3 +1579,16 @@ All Microsoft Learn URLs fetched 2026-05-16 unless noted.
 | F13 — testcontainers URL string-replace fragility | NIT | RESOLVED | Task 2.3 Step 1 fixture `postgres_url` rewritten to build URL explicitly from `pg.get_container_host_ip()`, `pg.get_exposed_port(5432)`, `pg.username`, `pg.password`, `pg.dbname`. |
 | Implicit-1 — missing `touches:` frontmatter | IMPLICIT | RESOLVED | YAML frontmatter block added at top of file with `touches:` (all planned files verified in repo or marked as planned new) and `skills_relevant:`. |
 | Implicit-2 — `test_migrations_startup.py` omitted from Phase 3 cleanup | IMPLICIT | RESOLVED | Task 3.2 Step 3 updated to delete `tests/test_migrations_startup.py` (all four tests patch `mom_bot.main.run_migrations` and become dead after Phase 3). `git rm` added to Task 3.2 Step 6 commit command. |
+
+### Devops review reconciliation — 2026-05-17
+
+Devops verdict: **0 BLOCKING, 3 CONCERN, 3 NIT — recommend proceeding to implementation.** This is the intended final plan revision before merge.
+
+| Finding | Severity | Status | Resolution |
+|---------|----------|--------|------------|
+| C-1 — CAE `staticIp` drift risk | CONCERN | RESOLVED | R11 added to risk register: likelihood Low / impact High; detection via `pg_hba.conf reject` log alerts; remediation via `az containerapp env show` + bicepparam update + redeploy; long-term fix is workload-profiles + NAT gateway (out of scope — CAE network type immutable). MS Learn citation: [Container Apps networking — outbound IP addresses](https://learn.microsoft.com/azure/container-apps/networking#http-edge-proxy-behavior) (fetched 2026-05-17). |
+| C-2 — drop `pool_size` to 5 | CONCERN | RESOLVED | `pool_size=10` → `pool_size=5` in Task 3.1 Step 3 `create_engine(...)` code block. R9 mitigation text updated: B1ms user-accessible ceiling is 35 (Azure reserves 15); deploy-window worst-case = 22/35 (halved vs prior design). Phase 3 acceptance criteria updated. Rationale paragraph added near `create_engine` block. MS Learn citation: [Postgres limits](https://learn.microsoft.com/azure/postgresql/configure-maintain/concepts-limits#maximum-connections) (fetched 2026-05-17). |
+| C-3 — single-SP blast-radius risk | CONCERN | RESOLVED | R12 added to risk register: `mom-bot-gha` holds Subscription Contributor + Postgres Entra admin on one FIC; likelihood Low / impact Critical. Accepted-known for #91; two-FIC split tracked as issue #103 (`mom-bot-gha-deploy` + `mom-bot-gha-migrate`). Interim hardening: `main` branch protection + PR-required workflow edits. |
+| N-1 — `pool_pre_ping=True` | NIT | RESOLVED | `pool_pre_ping=True` added to `create_engine(...)` kwargs alongside `pool_recycle=4800` in Task 3.1 Step 3. Rationale added: pessimistic-disconnect-handling catches token expiry, server failover, and network flaps — strictly more robust than `pool_recycle` alone. Phase 3 acceptance criteria updated. SQLAlchemy docs [Disconnect Handling - Pessimistic](https://docs.sqlalchemy.org/en/20/core/pooling.html#disconnect-handling-pessimistic) cited in module docstring. |
+| N-2 — Container Apps Jobs as future option | NIT | RESOLVED | Note added to Phase 4 Task 4.1 (after the GHA OIDC note, before Step 2): Container Apps Jobs is a viable reach pattern if migrations grow; adds two moving parts; rejected for #91 in favor of simpler CI-side approach. |
+| N-3 — `--resource` / `--resource-type` consistency | NIT | RESOLVED | All occurrences of `az account get-access-token --resource-type oss-rdbms` normalized to `--resource https://ossrdbms-aad.database.windows.net` (more explicit; matches spike's actual command). Updated: Q2 trade-off text, Modified files list, Phase 1 Task 1.3 smoke-test, Phase 2 Task 2.1 Step 4, Phase 4 Task 4.1 deploy.yml block. The mini-spike (Task 3.3) and Phase 4 entry criteria were already correct. |
