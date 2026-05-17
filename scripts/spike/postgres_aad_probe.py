@@ -288,9 +288,17 @@ def run_alembic(dsn: str, token: str) -> bool:
     env["SQLALCHEMY_DATABASE_URL"] = dsn
     # alembic's env.py reads MOM_BOT_DATABASE_URL; set both to be safe.
     env["MOM_BOT_DATABASE_URL"] = dsn
+    # Suppress user-site-packages to avoid collisions with editable installs
+    # under %APPDATA%\Roaming\Python (e.g. claude-usage) that caused SRE
+    # module-mismatch crashes when bare 'alembic' resolved to a different
+    # Python than the venv interpreter running this script.
+    env["PYTHONNOUSERSITE"] = "1"
+
+    cmd = [sys.executable, "-m", "alembic", "upgrade", "head"]
+    log.info("  cmd      : %s  (PYTHONNOUSERSITE=1)", cmd)
 
     result = subprocess.run(
-        ["alembic", "upgrade", "head"],
+        cmd,
         env=env,
         cwd=str(_REPO_ROOT),
         check=False,
