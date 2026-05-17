@@ -367,12 +367,17 @@ each `az containerapp update` (i.e., after each successful Step 9 run). Tracked 
 [#96](https://github.com/glitchwerks/mom-bot/issues/96).
 
 ```powershell
+# Collect names of all currently active revisions on the Container App
 $active = az containerapp revision list `
   --name ca-mom-bot --resource-group mom-bot `
   --query "[?properties.active].name" -o tsv
+
+# Resolve the newest active revision by createdTime — this is the one we keep
 $latest = az containerapp revision list `
   --name ca-mom-bot --resource-group mom-bot `
   --query "sort_by([?properties.active], &properties.createdTime)[-1].name" -o tsv
+
+# Deactivate every active revision except the newest
 $active -split "`n" | Where-Object { $_ -and $_ -ne $latest } | ForEach-Object {
   az containerapp revision deactivate --name ca-mom-bot --resource-group mom-bot --revision $_
 }
