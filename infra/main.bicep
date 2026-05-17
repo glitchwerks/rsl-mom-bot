@@ -47,7 +47,7 @@ param tenantId string = subscription().tenantId
 @description('Operator egress IP for Postgres firewall whitelist. Update if operator IP changes.')
 param operatorIpAddress string
 
-@description('Static egress IP of the Container Apps Environment (cae-mom-bot) for Postgres firewall whitelist. Retrieve with: az containerapp env show -n cae-mom-bot -g mom-bot --query properties.staticIp -o tsv')
+@description('Static egress IP of the Container Apps Environment (cae-mom-bot-eastus2) for Postgres firewall whitelist. Retrieve with: az containerapp env show -n cae-mom-bot-eastus2 -g mom-bot --query properties.staticIp -o tsv')
 param caeEgressIp string
 
 // ---------------------------------------------------------------------------

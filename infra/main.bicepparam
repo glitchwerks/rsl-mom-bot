@@ -38,5 +38,5 @@ param ghaServicePrincipalObjectId = readEnvironmentVariable('GHA_SP_OBJECT_ID', 
 param operatorIpAddress = 'CHANGE_ME_OPERATOR_IP'
 
 // Static egress IP of the CAE environment for Postgres firewall.
-// Look up with: az containerapp env show -n cae-mom-bot -g mom-bot --query 'properties.staticIp' -o tsv
+// Look up with: az containerapp env show -n cae-mom-bot-eastus2 -g mom-bot --query 'properties.staticIp' -o tsv
 param caeEgressIp = 'CHANGE_ME_CAE_STATIC_IP'

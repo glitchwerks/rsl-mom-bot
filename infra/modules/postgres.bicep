@@ -51,7 +51,7 @@ param ghaServicePrincipalName string = 'mom-bot-gha'
 @description('Operator egress IP address to whitelist in the firewall (single IP; update if the operator\'s IP changes).')
 param operatorIpAddress string
 
-@description('Static egress IP of the Container Apps Environment (cae-mom-bot). Used to allow the bot to connect to Postgres. Retrieve with: az containerapp env show -n cae-mom-bot -g mom-bot --query properties.staticIp -o tsv')
+@description('Static egress IP of the Container Apps Environment (cae-mom-bot-eastus2). Used to allow the bot to connect to Postgres. Retrieve with: az containerapp env show -n cae-mom-bot-eastus2 -g mom-bot --query properties.staticIp -o tsv')
 param caeEgressIp string
 
 resource pg 'Microsoft.DBforPostgreSQL/flexibleServers@2024-08-01' = {
