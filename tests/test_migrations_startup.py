@@ -22,6 +22,7 @@ from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from alembic.util.exc import CommandError
 
 # ---------------------------------------------------------------------------
 # Autouse fixture — prevent port 8080 collision across all setup_hook tests
@@ -74,27 +75,78 @@ def _fake_load_secret(name: str) -> str:
 
 @pytest.mark.asyncio
 async def test_setup_hook_calls_run_migrations_once() -> None:
-    """setup_hook() must call run_migrations exactly once.
+    """setup_hook() must call run_migrations exactly once before health server
+    and before the reminder background task is spawned.
 
-    Verifies that the migration entry-point is invoked during ``setup_hook``
-    before the background task (which opens DB sessions) is spawned.
+    Verifies three ordering invariants that the design depends on:
+    1. ``run_migrations`` is called exactly once.
+    2. ``run_migrations`` is called *before* ``start_health_server``.
+    3. ``run_migrations`` is called *before* ``asyncio.create_task`` spawns
+       the reminder background task (which opens DB sessions).
 
-    Mocks ``alembic.command.upgrade`` to avoid real disk I/O and asserts
-    ``run_migrations`` is called with the alembic config pointing at
-    ``alembic.ini``.
+    Call order is tracked via a shared ``call_order`` list populated by
+    ``side_effect`` on each mock.  This approach works across sync mocks
+    (``run_migrations``), async mocks (``start_health_server``), and the
+    builtin ``asyncio.create_task``.
     """
     from mom_bot.main import MomBot, build_intents
 
     bot = MomBot(intents=build_intents())
+    call_order: list[str] = []
+
+    runner_mock = MagicMock()
+    runner_mock.cleanup = AsyncMock()
+    site_mock = MagicMock()
+
+    async def _health_side_effect() -> tuple[MagicMock, MagicMock]:
+        call_order.append("start_health_server")
+        return runner_mock, site_mock
+
+    def _migrations_side_effect() -> None:
+        call_order.append("run_migrations")
+
+    real_create_task = asyncio.create_task
+
+    def _create_task_side_effect(coro: Any, **kwargs: Any) -> asyncio.Task[Any]:
+        call_order.append("create_task")
+        return real_create_task(coro, **kwargs)
 
     with (
         patch("mom_bot.main.load_secret", side_effect=_fake_load_secret),
         patch.object(bot.tree, "sync", new_callable=AsyncMock),
-        patch("mom_bot.main.run_migrations") as mock_run_migrations,
+        patch(
+            "mom_bot.main.run_migrations",
+            side_effect=_migrations_side_effect,
+        ) as mock_run_migrations,
+        patch(
+            "mom_bot.main.start_health_server",
+            side_effect=_health_side_effect,
+        ) as mock_health,
+        patch("asyncio.create_task", side_effect=_create_task_side_effect),
     ):
         await bot.setup_hook()
 
+    # --- call-count assertions ---
     mock_run_migrations.assert_called_once()
+    mock_health.assert_called_once()
+
+    # --- ordering assertions ---
+    assert "run_migrations" in call_order, "run_migrations was never called"
+    assert "start_health_server" in call_order, "start_health_server was never called"
+    assert "create_task" in call_order, "asyncio.create_task was never called"
+
+    mig_idx = call_order.index("run_migrations")
+    health_idx = call_order.index("start_health_server")
+    task_idx = call_order.index("create_task")
+
+    assert mig_idx < health_idx, (
+        f"run_migrations (pos {mig_idx}) must be called before "
+        f"start_health_server (pos {health_idx}); order was {call_order}"
+    )
+    assert mig_idx < task_idx, (
+        f"run_migrations (pos {mig_idx}) must be called before "
+        f"asyncio.create_task (pos {task_idx}); order was {call_order}"
+    )
 
     # Clean up background task.
     if bot._reminder_task is not None:
@@ -159,3 +211,45 @@ async def test_setup_hook_propagates_migration_failure() -> None:
         pytest.raises(RuntimeError, match="migration failed"),
     ):
         await bot.setup_hook()
+
+
+# ---------------------------------------------------------------------------
+# Test D — run_migrations propagates error for missing alembic.ini
+# ---------------------------------------------------------------------------
+
+
+def test_run_migrations_propagates_missing_config(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """run_migrations() must not silently swallow a missing alembic.ini.
+
+    When ``MOM_BOT_ALEMBIC_CONFIG`` points at a nonexistent file, Alembic
+    cannot locate a ``script_location`` and raises
+    :exc:`alembic.util.exc.CommandError`.  ``run_migrations`` must let this
+    propagate — a misconfigured or missing config file is a fatal startup
+    error that the operator must fix, not a condition to swallow.
+
+    This test verifies the error-propagation contract without creating any
+    real file on disk; the nonexistent path is sufficient to trigger Alembic's
+    ``CommandError``.
+
+    Args:
+        monkeypatch: pytest fixture used to set the env var for this test only.
+    """
+    monkeypatch.setenv("MOM_BOT_ALEMBIC_CONFIG", "/nonexistent/alembic.ini")
+
+    # Force mom_bot.main to re-read MOM_BOT_ALEMBIC_CONFIG at module level
+    # by reloading it with the patched env var in place.
+    import importlib
+
+    import mom_bot.main as main_mod
+
+    importlib.reload(main_mod)
+
+    with pytest.raises(CommandError, match="script_location"):
+        main_mod.run_migrations()
+
+    # Reload once more to restore the original _ALEMBIC_INI value so
+    # subsequent tests in this session are not affected.
+    monkeypatch.delenv("MOM_BOT_ALEMBIC_CONFIG", raising=False)
+    importlib.reload(main_mod)
