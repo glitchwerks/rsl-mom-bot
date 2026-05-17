@@ -355,6 +355,33 @@ image to `ca-mom-bot`. First run succeeds if:
 
 ---
 
+## Step 10 — Manual old-revision deactivation (#96 stopgap)
+
+`activeRevisionsMode: 'Single'` deactivates prior revisions automatically only when
+the Container App has ingress — the mode governs traffic routing, not revision lifecycle
+in the absence of HTTP traffic. Because `ca-mom-bot` is ingress-less, deploying a new
+image does not deactivate the old revision; stale revisions accumulate and consume
+quota. Until Phase 2 of [#83](https://github.com/glitchwerks/mom-bot/issues/83)
+automates this inside the deploy workflow, run the following snippet manually after
+each `az containerapp update` (i.e., after each successful Step 9 run). Tracked in
+[#96](https://github.com/glitchwerks/mom-bot/issues/96).
+
+```powershell
+$active = az containerapp revision list `
+  --name ca-mom-bot --resource-group mom-bot `
+  --query "[?properties.active].name" -o tsv
+$latest = az containerapp revision list `
+  --name ca-mom-bot --resource-group mom-bot `
+  --query "sort_by([?properties.active], &properties.createdTime)[-1].name" -o tsv
+$active -split "`n" | Where-Object { $_ -and $_ -ne $latest } | ForEach-Object {
+  az containerapp revision deactivate --name ca-mom-bot --resource-group mom-bot --revision $_
+}
+```
+
+Automation tracked in [#83](https://github.com/glitchwerks/mom-bot/issues/83); see `deploy.yml` and `scripts/deactivate-old-revisions.sh` once that work lands.
+
+---
+
 ## Notes
 
 ### Placeholder container image
@@ -390,6 +417,7 @@ az deployment sub create `
 
 **Post-merge (validation):**
 - [ ] Step 9 — Run the deploy workflow (`workflow_dispatch` on `deploy.yml` from `main`)
+- [ ] Step 10 — Manually deactivate old revisions (stopgap until #83 automates it)
 
 ---
 
