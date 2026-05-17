@@ -8,6 +8,8 @@ WORKDIR /app
 # Copy only the files needed for installation first (layer-cache friendly).
 COPY pyproject.toml ./
 COPY src/ ./src/
+COPY alembic.ini ./
+COPY migrations/ ./migrations/
 
 # Install the package in editable mode so the src-layout is on sys.path.
 # We install as root here only for the pip step; the process runs as mombot.
