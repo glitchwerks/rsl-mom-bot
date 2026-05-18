@@ -492,67 +492,58 @@ resource fwCae 'Microsoft.DBforPostgreSQL/flexibleServers/firewallRules@2024-08-
 
 The spike (`docs/spike/2026-05-17-postgres-aad-findings.md` § Charge 5) proved that `0002_reminders_schema.py` fails on Postgres before `0003` can run — `0003` depends on `0002` being in a committed state, but `0002` dies at the CHECK constraint DDL. Two paths exist:
 
-1. **Rewrite inside 0002** (this path): change the CHECK expression in `0002` to use `EXTRACT(SECOND FROM fire_time_utc) = 0` (dialect-portable). Since #91 targets a fresh Postgres database with no data migration, this is the clean path — it eliminates the broken migration from history entirely.
+1. **Rewrite inside 0002** (this path): change the CHECK expression in `0002` so it compiles against both dialects. Since #91 targets a fresh Postgres database with no data migration, this is the clean path — it eliminates the broken migration from history entirely.
 2. **Drop-and-recreate in 0003**: leave `0002` broken as-is and add a `0003` that drops and recreates the constraint. Required only for existing SQLite databases being migrated forward — which #91 explicitly does not require.
 
 **Decision: take path 1.** The existing Phase 2 Task 2.1 that authored `0003_postgres_check_constraint_portability.py` is replaced by the in-place 0002 edit below. The `0003` file should **not** be created.
 
-The `EXTRACT(SECOND FROM fire_time_utc) = 0` expression is dialect-portable: it works on Postgres natively and on SQLite ≥ 3.38 (released 2022-02). If minimum SQLite version in the test matrix is below 3.38, add a dialect-branch fallback in the migration; otherwise the single expression covers both paths.
+**Correction (verified empirically during PR #108, 2026-05-18):** an earlier revision of this plan claimed `EXTRACT(SECOND FROM fire_time_utc) = 0` was a single-expression dialect-portable predicate (with a "if SQLite < 3.38, fall back to a runtime branch" caveat). This was wrong. SQLite has **no** raw-SQL `EXTRACT(... FROM ...)` at any version — the 3.38 floor governs SQLAlchemy ORM-layer translation (where `sa.extract()` is rewritten to `strftime` internally), not raw SQL passed verbatim to the engine. A `CheckConstraint` receives the expression as a raw string, so `EXTRACT(...)` produces `sqlite3.OperationalError: near "FROM": syntax error` against any SQLite. The correct path is the runtime dialect branch — `strftime()` for SQLite, `EXTRACT(SECOND FROM ...)` for Postgres — which the prose below now treats as the primary implementation, not a contingency.
 
 #### Task 2.1: Edit `0002_reminders_schema.py` in place
 
 **Files:**
 - Modify: `migrations/versions/0002_reminders_schema.py`
 
-- [ ] **Step 1: Replace the strftime CHECK**
+- [x] **Step 1: Replace the strftime CHECK with a runtime dialect branch**
 
-Locate the `sa.CheckConstraint(...)` call for `ck_fire_time_no_seconds` in `migrations/versions/0002_reminders_schema.py` (currently lines ~65-68 of the upgrade function, reading `"CAST(strftime('%S', fire_time_utc) AS INTEGER) = 0"`). Replace it with:
+Locate the `sa.CheckConstraint(...)` call for `ck_fire_time_no_seconds` in `migrations/versions/0002_reminders_schema.py` (originally lines ~65-68 of the upgrade function, reading `"CAST(strftime('%S', fire_time_utc) AS INTEGER) = 0"`). Replace it with a dialect-aware expression computed at migration runtime:
 
 ```python
-sa.CheckConstraint(
-    "EXTRACT(SECOND FROM fire_time_utc) = 0",
-    name="ck_fire_time_no_seconds",
-),
+def _fire_time_check_expr() -> str:
+    # SQLite has no raw-SQL EXTRACT; Postgres has no strftime. Both
+    # expressions enforce "seconds component of fire_time_utc is zero".
+    # See PR #108 / issue #107 for the empirical verification.
+    if op.get_bind().dialect.name == "sqlite":
+        return "CAST(strftime('%S', fire_time_utc) AS INTEGER) = 0"
+    return "EXTRACT(SECOND FROM fire_time_utc) = 0"
 ```
+
+Call `_fire_time_check_expr()` from `upgrade()` when building the `sa.CheckConstraint`. Add a module-level comment referencing #107 / PR #108 / spike § Charge 5 so the next reader understands why the branch exists.
 
 This change is a destructive edit to a committed migration. It is acceptable because:
 - #91 is explicitly a fresh-Postgres-no-data-migration epic.
 - There is no production SQLite database with applied migrations (the bot has never written successfully — issue #91 status).
-- The `EXTRACT(SECOND FROM ...)` syntax is accepted by SQLite ≥ 3.38 (released 2022-02-22). Confirm minimum SQLite version in the CI test matrix or add a dialect-branch if needed.
 
 **Note on the old 0003 plan:** the prior Task 2.1 in this plan created `migrations/versions/0003_postgres_check_constraint_portability.py` with a dialect-branched drop-and-recreate. Do not create that file. The `tests/test_alembic.py` assertion change at line ~64 (from `ck_fire_time_no_seconds_v2` back to `ck_fire_time_no_seconds`) is no longer needed — the constraint name is unchanged.
 
-- [ ] **Step 2: Verify SQLite version on the CI runner**
+- [x] **Step 2: Confirm the SQLite path still runs the CHECK**
+
+The dialect branch above means SQLite continues to use the original `strftime()` predicate — already authoritative for the SQLite test path. No version floor applies. The earlier draft of this step worried about SQLite ≥ 3.38 because it assumed `EXTRACT()` was the single SQLite expression; with the branch in place that concern is moot.
+
+For completeness, verify SQLite version on developer + CI runners:
 
 ```bash
 python -c 'import sqlite3; print(sqlite3.sqlite_version)'
 ```
 
-`EXTRACT(SECOND FROM ...)` requires SQLite ≥ 3.38 (released 2022-02-22). CI's Ubuntu 22.04 ships SQLite 3.37.x. If the version is below 3.38, SQLite will silently accept the expression without enforcing the CHECK — the constraint becomes a no-op locally and the SQLite test path is not authoritative.
+PR #108 measured 3.50.4 locally and 3.45+ on `ubuntu-latest` — both fine; either dialect branch would have worked even if `EXTRACT` were valid SQLite SQL.
 
-**If SQLite < 3.38 on CI:** the `test_alembic_postgres.py` path (Task 2.3) becomes the authoritative enforcement of the CHECK. The SQLite constraint expression should be wrapped in a dialect branch:
-
-```python
-from alembic import op
-from sqlalchemy.engine import Engine
-from sqlalchemy import text
-
-def _check_expr(conn: Engine) -> str:
-    if conn.dialect.name == "sqlite":
-        return "CAST(strftime('%S', fire_time_utc) AS INTEGER) = 0"
-    return "EXTRACT(SECOND FROM fire_time_utc) = 0"
-```
-
-Document the dialect branch decision in the migration file comment if taken.
-
-**If SQLite ≥ 3.38 on CI:** a single `EXTRACT(SECOND FROM fire_time_utc) = 0` expression covers both dialects. Proceed with the single expression.
-
-- [ ] **Step 3: Run SQLite-side tests**
+- [x] **Step 3: Run SQLite-side tests**
 
 ```powershell
 .\.venv\Scripts\python.exe -m pytest tests/test_alembic.py -v
 ```
-Expected: PASS — the edited migration runs against SQLite using `EXTRACT()` (or dialect branch if SQLite < 3.38).
+Expected: PASS — the edited migration runs against SQLite using the branched `strftime()` expression.
 
 - [ ] **Step 4: Run Postgres-side migration from operator laptop**
 
