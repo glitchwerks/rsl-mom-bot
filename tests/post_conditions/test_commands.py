@@ -365,6 +365,59 @@ async def test_set_command_404_shows_link_account_guidance() -> None:
     interaction.response.send_message.assert_not_awaited()
 
 
+@pytest.mark.asyncio
+async def test_set_command_initial_render_includes_summary_embed() -> None:
+    """/post-conditions-set includes embed=<discord.Embed> on the initial render.
+
+    The embed must be passed to ``followup.send`` at open time so pre-existing
+    preferences are visible before the user interacts with any Select menu.
+    """
+    interaction = _make_interaction()
+    # Client returns _CATALOG (two items) and _PREFS (item id=5 pre-selected).
+    siege_client = _make_client(catalog=_CATALOG, prefs=_PREFS)
+
+    with patch(
+        "mom_bot.post_conditions.commands.PostConditionsView",
+        autospec=True,
+    ) as MockView:
+        mock_view_instance = MagicMock()
+        mock_view_instance.build_header = MagicMock(return_value="Page 1 of 3")
+        fake_embed = MagicMock(spec=discord.Embed)
+        mock_view_instance.build_embed = MagicMock(return_value=fake_embed)
+        MockView.return_value = mock_view_instance
+
+        await post_conditions_set(interaction, siege_client=siege_client)
+
+    call_kwargs = interaction.followup.send.call_args[1]
+    assert isinstance(
+        call_kwargs.get("embed"), discord.Embed
+    ), "followup.send must include embed= on first render"
+    assert call_kwargs.get("view") is mock_view_instance
+    mock_view_instance.build_embed.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_set_command_initial_embed_reflects_preexisting_selections() -> None:
+    """/post-conditions-set embed description is not 'None selected yet.' when prefs exist.
+
+    Exercises the real PostConditionsView (no mock) to confirm the embed body
+    built from ``initial_prefs`` reflects pre-existing selections.
+    """
+    interaction = _make_interaction()
+    siege_client = _make_client(catalog=_CATALOG, prefs=_PREFS)
+
+    await post_conditions_set(interaction, siege_client=siege_client)
+
+    call_kwargs = interaction.followup.send.call_args[1]
+    embed: discord.Embed = call_kwargs.get("embed")
+    assert embed is not None, "embed must be present on initial render"
+    assert isinstance(embed, discord.Embed)
+    # With _PREFS containing id=5, the description must NOT be the empty-state sentinel.
+    assert (
+        embed.description != "_None selected yet._"
+    ), "embed should show pre-existing selections, not the empty-state text"
+
+
 # ---------------------------------------------------------------------------
 # register()
 # ---------------------------------------------------------------------------
