@@ -15,6 +15,7 @@ import pytest
 
 from mom_bot.post_conditions.views import (
     PostConditionsView,
+    _selections_to_meta_keyed,
     build_summary_embed,
 )
 
@@ -603,3 +604,52 @@ async def test_prev_next_preserves_embed_selections() -> None:
     # should still appear in the embed.
     assert embed.description is not None
     assert "Only Barbarian Champions." in embed.description
+
+
+# ---------------------------------------------------------------------------
+# _selections_to_meta_keyed — unit tests
+# ---------------------------------------------------------------------------
+
+
+def test_selections_to_meta_keyed_returns_empty_for_empty_input() -> None:
+    """Empty selections dict and non-empty pages → empty result dict."""
+    result = _selections_to_meta_keyed({}, _PAGES)
+    assert result == {}
+
+
+def test_selections_to_meta_keyed_returns_empty_for_all_false_selections() -> None:
+    """All-False selections → empty result (falsy entries produce no labels)."""
+    selections: dict[int, bool] = {1: False, 2: False, 3: False}
+    result = _selections_to_meta_keyed(selections, _PAGES)
+    assert result == {}
+
+
+def test_selections_to_meta_keyed_distributes_mixed_selections() -> None:
+    """Mixed True/False selections are distributed into the correct meta buckets."""
+    # id 1 → Faction & League, id 3 → Role Affinity Rarity, id 5 → Effects & Other
+    selections: dict[int, bool] = {1: True, 2: False, 3: True, 4: False, 5: True}
+    result = _selections_to_meta_keyed(selections, _PAGES)
+    assert result == {
+        "Faction & League": {1},
+        "Role, Affinity, Rarity": {3},
+        "Effects & Other": {5},
+    }
+
+
+def test_selections_to_meta_keyed_ignores_ids_not_in_pages() -> None:
+    """IDs in selections that are absent from pages are silently ignored."""
+    # id 999 is not present in _PAGES — should not crash or appear in result.
+    selections: dict[int, bool] = {1: True, 999: True}
+    result = _selections_to_meta_keyed(selections, _PAGES)
+    assert result == {"Faction & League": {1}}
+    assert all(999 not in ids for ids in result.values())
+
+
+def test_selections_to_meta_keyed_omits_empty_meta_labels() -> None:
+    """Meta labels whose bucket would be empty do not appear as keys in result."""
+    # Only id 5 selected (Effects & Other); Faction & League and RAR should be absent.
+    selections: dict[int, bool] = {5: True}
+    result = _selections_to_meta_keyed(selections, _PAGES)
+    assert "Faction & League" not in result
+    assert "Role, Affinity, Rarity" not in result
+    assert result == {"Effects & Other": {5}}
