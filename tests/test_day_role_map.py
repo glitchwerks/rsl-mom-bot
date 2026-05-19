@@ -297,20 +297,15 @@ async def test_seed_logs_warning_when_role_missing(
     combined = " ".join(warning_msgs)
 
     # The searched name must appear under expected=.
-    assert "expected=" in combined, (
-        f"Expected 'expected=' in log message; got: {combined}"
-    )
-    assert "Attack Day 1" in combined, (
-        f"Expected searched role name 'Attack Day 1' in log; got: {combined}"
-    )
+    assert "expected=" in combined, f"Expected 'expected=' in log message; got: {combined}"
+    assert (
+        "Attack Day 1" in combined
+    ), f"Expected searched role name 'Attack Day 1' in log; got: {combined}"
 
     # The available roles must appear under available=.
-    assert "available=" in combined, (
-        f"Expected 'available=' in log message; got: {combined}"
-    )
+    assert "available=" in combined, f"Expected 'available=' in log message; got: {combined}"
     assert _ROLE_NAME_DAY2 in combined, (
-        f"Expected guild role '{_ROLE_NAME_DAY2}' in available= list; "
-        f"got: {combined}"
+        f"Expected guild role '{_ROLE_NAME_DAY2}' in available= list; " f"got: {combined}"
     )
 
     # Day 2 row should still be inserted even though day 1 was skipped.
@@ -370,12 +365,12 @@ async def test_seed_warning_available_reflects_actual_guild_roles(
 
     # Both wrong-named roles must appear in available= so the operator can
     # see the exact names present on the guild.
-    assert _WRONG_NAME_1 in combined, (
-        f"Expected '{_WRONG_NAME_1}' in available= list; got: {combined}"
-    )
-    assert _WRONG_NAME_2 in combined, (
-        f"Expected '{_WRONG_NAME_2}' in available= list; got: {combined}"
-    )
+    assert (
+        _WRONG_NAME_1 in combined
+    ), f"Expected '{_WRONG_NAME_1}' in available= list; got: {combined}"
+    assert (
+        _WRONG_NAME_2 in combined
+    ), f"Expected '{_WRONG_NAME_2}' in available= list; got: {combined}"
 
     # The available list must be sorted (repr of a sorted Python list).
     # "Day 1" < "Day 2" lexicographically, so Day 1 must appear first.
