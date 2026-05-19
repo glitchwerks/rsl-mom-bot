@@ -6,8 +6,6 @@ deterministic ordering, and empty-meta-group suppression.
 
 from __future__ import annotations
 
-import pytest
-
 from mom_bot.post_conditions.modal_layout import ModalPage, split_meta_for_modals
 
 # ---------------------------------------------------------------------------
