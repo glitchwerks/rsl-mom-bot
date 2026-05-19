@@ -230,7 +230,12 @@ async def post_conditions_set(
         siege_client=siege_client,
     )
     header = view.build_header()
-    await interaction.followup.send(content=header, view=view, ephemeral=True)
+    await interaction.followup.send(
+        content=header,
+        embed=view.build_embed(),
+        view=view,
+        ephemeral=True,
+    )
 
 
 # ---------------------------------------------------------------------------
