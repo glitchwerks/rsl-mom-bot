@@ -67,9 +67,10 @@ def split_meta_for_modals(
 
     for meta_label, conds in group_by_meta(conditions):
         # Deterministic ordering: (condition_type, id) ascending.
+        # Both keys are required per the Args docstring.
         sorted_conds = sorted(
             conds,
-            key=lambda c: (str(c.get("condition_type", "")), int(c.get("id", 0))),
+            key=lambda c: (str(c["condition_type"]), int(c["id"])),
         )
 
         # Chunk into slices of _PAGE_SIZE.

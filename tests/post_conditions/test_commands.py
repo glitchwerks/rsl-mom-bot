@@ -22,6 +22,7 @@ from mom_bot.post_conditions.commands import (
     post_conditions_set,
     register,
 )
+from mom_bot.post_conditions.views import EditPreferencesView
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -437,3 +438,19 @@ def test_register_attaches_commands_to_tree() -> None:
 
     # Should have registered 3 commands.
     assert tree.command.call_count == 3
+
+
+@pytest.mark.asyncio
+async def test_set_command_attaches_real_edit_preferences_view() -> None:
+    """Integration: real EditPreferencesView is constructed and attached to followup.send.
+
+    Exercises the command end-to-end without mocking EditPreferencesView so
+    that the isinstance check is against the concrete class, not a mock.
+    """
+    interaction = _make_interaction()
+    siege_client = _make_client(catalog=_CATALOG, prefs=_PREFS)
+
+    await post_conditions_set(interaction, siege_client=siege_client)
+
+    call_kwargs = interaction.followup.send.call_args[1]
+    assert isinstance(call_kwargs["view"], EditPreferencesView)

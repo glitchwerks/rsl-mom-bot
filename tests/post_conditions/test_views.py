@@ -572,3 +572,54 @@ def test_initial_embed_equals_build_summary_embed_output() -> None:
 
     assert embed_from_method.description == expected_embed.description
     assert embed_from_method.title == expected_embed.title
+
+
+# ---------------------------------------------------------------------------
+# Discord component-limit safety net
+# ---------------------------------------------------------------------------
+
+
+def test_edit_preferences_view_stays_within_discord_component_limit() -> None:
+    """View total components (edit buttons + dismiss) must not exceed Discord's 25 cap.
+
+    Constructs a large synthetic catalog that exercises sub-pagination across
+    multiple meta-pages and asserts the resulting child-count stays within
+    the limit defined by _DISCORD_VIEW_COMPONENT_LIMIT.
+    """
+    from mom_bot.post_conditions.views import _DISCORD_VIEW_COMPONENT_LIMIT
+
+    # 20 conditions per condition_type across all canonical types → 140 total,
+    # many sub-pages.  IDs are globally unique so no collision across types.
+    condition_types = (
+        "faction",
+        "league",
+        "role",
+        "affinity",
+        "rarity",
+        "effect",
+        "other",
+    )
+    large_catalog: list[dict[str, Any]] = []
+    uid = 0
+    for ctype in condition_types:
+        for _ in range(20):
+            large_catalog.append(
+                {
+                    "id": uid,
+                    "condition_type": ctype,
+                    "description": f"Condition {uid}",
+                }
+            )
+            uid += 1
+
+    view = EditPreferencesView(
+        catalog=large_catalog,
+        preferences=[],
+        siege_client=_make_siege_client(),
+        discord_id="42",
+    )
+    assert len(view.children) <= _DISCORD_VIEW_COMPONENT_LIMIT, (
+        f"View has {len(view.children)} components, exceeding Discord's "
+        f"{_DISCORD_VIEW_COMPONENT_LIMIT}-component cap.  "
+        "The view design needs a hard-limit guard."
+    )

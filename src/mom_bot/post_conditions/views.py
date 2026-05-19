@@ -51,12 +51,19 @@ _EMBED_MAX_CHARS = 4096
 # Truncation suffix template — leave enough headroom for the suffix itself.
 _TRUNCATION_SUFFIX = "… and {n} more"
 
+# Discord caps a View's component count at 25; see discord.ui.View docs.
+_DISCORD_VIEW_COMPONENT_LIMIT = 25
+
 
 def _selections_to_meta_keyed(
     selections: dict[int, bool],
     pages: list[tuple[str, list[dict[str, Any]]]],
 ) -> dict[str, set[int]]:
     """Convert flat {id: bool} to {meta_label: {id, ...}} for build_summary_embed.
+
+    This adapter bridges two representations: EditPreferencesView's flat
+    boolean dict (convenient for modal updates) and build_summary_embed's
+    grouped-by-meta-label dict (convenient for embed rendering).
 
     Walks ``pages`` (the existing ``group_by_meta(...)`` output) and, for
     each ``(label, conditions)`` pair, collects the IDs that are truthy in
@@ -77,9 +84,11 @@ def _selections_to_meta_keyed(
     """
     result: dict[str, set[int]] = {}
     for label, conditions in pages:
-        selected: set[int] = {
-            int(cond["id"]) for cond in conditions if selections.get(int(cond["id"]), False)
-        }
+        selected: set[int] = set()
+        for cond in conditions:
+            cid = int(cond["id"])
+            if selections.get(cid, False):
+                selected.add(cid)
         if selected:
             result[label] = selected
     return result
@@ -295,7 +304,12 @@ class EditPreferencesModal(discord.ui.Modal):
                 self.discord_id,
                 ids=[cid for cid, on in self.parent_view.selections.items() if on],
             )
-        except SiegeWebError:
+        except SiegeWebError as exc:
+            _logger.error(
+                "Failed to save preferences for discord_id=%s: %s",
+                self.discord_id,
+                exc,
+            )
             self.parent_view.selections = prior
             await interaction.response.send_message(
                 "Could not save preferences — please try again.",
@@ -416,7 +430,8 @@ class EditPreferencesView(discord.ui.View):
                 ``GET /api/post-conditions``.
             preferences: The user's currently-saved condition IDs from
                 ``GET /api/members/me/preferences``.  Used to seed
-                ``selections``.
+                ``selections``.  IDs not present in ``catalog`` are
+                silently ignored.
             siege_client: A
                 :class:`~mom_bot.post_conditions.client.SiegeWebClient`
                 instance threaded to each modal for the PUT call.
@@ -435,9 +450,10 @@ class EditPreferencesView(discord.ui.View):
 
         # Flat {id: bool} selections seeded from saved preferences.
         preferred: set[int] = set(preferences)
-        self.selections: dict[int, bool] = {
-            int(cond["id"]): (int(cond["id"]) in preferred) for cond in catalog
-        }
+        self.selections: dict[int, bool] = {}
+        for cond in catalog:
+            cid = int(cond["id"])
+            self.selections[cid] = cid in preferred
 
         # One button per ModalPage sub-page.
         self._modal_pages = split_meta_for_modals(catalog)
