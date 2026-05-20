@@ -36,6 +36,14 @@ __all__ = [
 # Source: .venv/Lib/site-packages/discord/ui/modal.py docstring (L88).
 _MODAL_TITLE_LIMIT = 45
 
+# Discord caps SelectOption.label at 100 characters.
+# Source: https://docs.discord.com/developers/components/reference
+_SELECT_OPTION_LABEL_LIMIT = 100
+
+# Discord's custom_id max is 100 chars. The prefix "post_conditions_select_"
+# is 23 chars, so cap the label portion at 70 to leave comfortable headroom.
+_CUSTOM_ID_LABEL_LIMIT = 70
+
 _logger = logging.getLogger(__name__)
 
 # Emojis for condition_type visual cues.
@@ -270,30 +278,40 @@ class EditPreferencesModal(discord.ui.Modal):
         self.discord_id = discord_id
         self.pages = pages
 
-        # Discord caps SelectOption.label at 100 characters.
-        # Source: https://docs.discord.com/developers/components/reference
-        _SELECT_OPTION_LABEL_LIMIT = 100
-
         # Build Select options from the sub-page conditions.
-        options = [
-            discord.SelectOption(
-                label=str(cond["description"])[:_SELECT_OPTION_LABEL_LIMIT],
-                value=str(cond["id"]),
-                default=bool(parent_view.selections.get(int(cond["id"]), False)),
+        options = []
+        for cond in page.conditions:
+            desc = str(cond["description"])
+            label = (
+                desc
+                if len(desc) <= _SELECT_OPTION_LABEL_LIMIT
+                else desc[: _SELECT_OPTION_LABEL_LIMIT - 1] + "…"
             )
-            for cond in page.conditions
-        ]
+            options.append(
+                discord.SelectOption(
+                    label=label,
+                    value=str(cond["id"]),
+                    default=bool(parent_view.selections.get(int(cond["id"]), False)),
+                )
+            )
 
+        # Cap label at 70 chars so the full custom_id stays within Discord's
+        # 100-char limit (23-char prefix + up to 70-char label = 93 chars).
+        safe_label = page.label[:_CUSTOM_ID_LABEL_LIMIT]
+        # Placeholder is truncated to 150 chars (Discord Select.placeholder cap).
+        placeholder = f"Select {page.label} preferences…"[:150]
         self.select: discord.ui.Select[Any] = discord.ui.Select(
-            placeholder="Select preferences …",
+            placeholder=placeholder,
             min_values=0,
             max_values=len(options),
             options=options,
-            custom_id=f"post_conditions_select_{page.label}",
+            custom_id=f"post_conditions_select_{safe_label}",
         )
 
         # Wrap in Label (type 18) so the modal payload's top-level component
         # type is accepted by Discord's modal endpoint (types 1, 10, 18 only).
+        # Note: Label.text shares the same 45-char cap as Modal.title — see
+        # discord.py Label docstring (.venv/Lib/site-packages/discord/ui/label.py:L60).
         self.add_item(
             discord.ui.Label(
                 text=page.label[:_MODAL_TITLE_LIMIT],

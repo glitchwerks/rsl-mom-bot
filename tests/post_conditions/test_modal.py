@@ -228,11 +228,32 @@ def test_select_accessible_via_modal_select_attr() -> None:
 
 
 def test_select_option_labels_match_descriptions() -> None:
-    """Select option labels equal the condition descriptions (up to 100 chars)."""
+    """Select option labels equal descriptions up to 100 chars with ellipsis.
+
+    For descriptions that fit within 100 chars the label is unchanged.
+    For descriptions that exceed 100 chars the label is truncated to 99
+    chars with a trailing "…" (U+2026) so the total is exactly 100 chars.
+    """
     modal, _ = _build_modal()
     labels = [opt.label for opt in modal.select.options]
     expected = [str(c["description"])[:100] for c in _PAGE_A.conditions]
     assert labels == expected
+
+
+def test_select_option_label_gets_ellipsis_when_truncated() -> None:
+    """A 200-char description is rendered as desc[:99] + "…" (total 100 chars)."""
+    long_desc = "X" * 200
+    cond_long: dict[str, Any] = {
+        "id": 99,
+        "condition_type": "other",
+        "description": long_desc,
+        "stronghold_level": 1,
+    }
+    page_long = ModalPage(label="Overflow", conditions=[cond_long])
+    modal, _ = _build_modal(page=page_long, pages=[("Overflow", [cond_long])])
+    label = modal.select.options[0].label
+    assert len(label) == 100
+    assert label == "X" * 99 + "…"
 
 
 def test_select_option_values_are_stringified_ids() -> None:
@@ -285,6 +306,19 @@ def test_modal_title_truncated_to_45_chars() -> None:
     modal, _ = _build_modal(page=page)
     assert len(modal.title) <= _MODAL_TITLE_LIMIT
     assert modal.title == long_label[:_MODAL_TITLE_LIMIT]
+
+
+def test_select_custom_id_stays_within_discord_limit() -> None:
+    """custom_id is at most 100 chars even when page.label is very long.
+
+    Discord's custom_id field is capped at 100 characters.  The prefix
+    "post_conditions_select_" is 23 chars; the page label is capped at 70
+    chars, so the worst-case total is 93 chars.
+    """
+    long_label = "X" * 200
+    page = ModalPage(label=long_label, conditions=[_COND_A1])
+    modal, _ = _build_modal(page=page, pages=[("X" * 200, [_COND_A1])])
+    assert len(modal.select.custom_id) <= 100
 
 
 # ---------------------------------------------------------------------------
