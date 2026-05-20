@@ -445,7 +445,7 @@ Goal: implement **per-meta-group chunking** per § 3.1. Outer chunk = one page p
 - Create: `src/mom_bot/post_conditions/grid_layout.py`
 - Create: `tests/post_conditions/test_grid_layout.py`
 
-- [ ] **Step 1: Write the failing test for empty input.**
+- [x] **Step 1: Write the failing test for empty input.**
 
 ```python
 # tests/post_conditions/test_grid_layout.py
@@ -462,13 +462,13 @@ def test_split_by_meta_group_empty_returns_empty_list() -> None:
     assert split_by_meta_group([]) == []
 ```
 
-- [ ] **Step 2: Run it.** Expected: FAIL (ImportError: module not found).
+- [x] **Step 2: Run it.** Expected: FAIL (ImportError: module not found).
 
 ```bash
 .venv/Scripts/python.exe -m pytest tests/post_conditions/test_grid_layout.py -v
 ```
 
-- [ ] **Step 3: Create the module with minimal scaffolding.**
+- [x] **Step 3: Create the module with minimal scaffolding.**
 
 ```python
 # src/mom_bot/post_conditions/grid_layout.py
@@ -552,9 +552,9 @@ def split_by_meta_group(
     return pages
 ```
 
-- [ ] **Step 4: Run the empty test.** Expected: PASS.
+- [x] **Step 4: Run the empty test.** Expected: PASS.
 
-- [ ] **Step 5: Add the meta-bucketing test.**
+- [x] **Step 5: Add the meta-bucketing test.**
 
 ```python
 def test_split_by_meta_group_one_page_per_meta_group_no_merging() -> None:
@@ -585,9 +585,9 @@ def test_split_by_meta_group_one_page_per_meta_group_no_merging() -> None:
     assert {c["id"] for c in pages[0].conditions} == {1, 4}
 ```
 
-- [ ] **Step 6: Run.** Expected: PASS (logic already implemented in Step 3).
+- [x] **Step 6: Run.** Expected: PASS (logic already implemented in Step 3).
 
-- [ ] **Step 7: Add the sub-pagination test.**
+- [x] **Step 7: Add the sub-pagination test.**
 
 ```python
 def test_split_by_meta_group_subpaginates_at_page_size() -> None:
@@ -620,9 +620,9 @@ def test_split_by_meta_group_respects_custom_page_size() -> None:
     ]
 ```
 
-- [ ] **Step 8: Run all four tests.** Expected: 4 PASS.
+- [x] **Step 8: Run all four tests.** Expected: 4 PASS.
 
-- [ ] **Step 9: Commit.**
+- [x] **Step 9: Commit.**
 
 ```bash
 git add src/mom_bot/post_conditions/grid_layout.py tests/post_conditions/test_grid_layout.py
