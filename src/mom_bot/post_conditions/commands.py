@@ -40,7 +40,7 @@ from mom_bot.post_conditions.client import (
     SiegeWebNotFoundError,
 )
 from mom_bot.post_conditions.grouping import group_by_meta
-from mom_bot.post_conditions.views import PostConditionsGridView
+from mom_bot.post_conditions.views import PostConditionsGridView, build_grouped_embed
 
 __all__ = [
     "post_conditions_catalog",
@@ -120,8 +120,18 @@ async def post_conditions_catalog(
         await interaction.followup.send(_OPS_ERROR_MSG, ephemeral=True)
         return
 
-    content = _format_catalog(catalog)
-    await interaction.followup.send(content, ephemeral=True)
+    if not catalog:
+        await interaction.followup.send("No post-conditions found.", ephemeral=True)
+        return
+
+    pages = group_by_meta(catalog)
+    selected_ids = {int(c["id"]) for c in catalog}
+    embed = build_grouped_embed(
+        title="Post-condition catalog",
+        pages=pages,
+        selected_ids=selected_ids,
+    )
+    await interaction.followup.send(embed=embed, ephemeral=True)
 
 
 async def post_conditions_get(
@@ -171,8 +181,14 @@ async def post_conditions_get(
         )
         return
 
-    content = _format_catalog(prefs)
-    await interaction.followup.send(content, ephemeral=True)
+    pages = group_by_meta(prefs)
+    selected_ids = {int(p["id"]) for p in prefs}
+    embed = build_grouped_embed(
+        title="Your post-condition preferences",
+        pages=pages,
+        selected_ids=selected_ids,
+    )
+    await interaction.followup.send(embed=embed, ephemeral=True)
 
 
 async def post_conditions_set(
