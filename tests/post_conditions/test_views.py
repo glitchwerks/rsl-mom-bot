@@ -1027,3 +1027,131 @@ def test_grid_view_b1_regression_subpaginated_meta_renders_heading_once() -> Non
     assert (
         all_text.count("Faction & League") == 1
     ), "B1 regression: 'Faction & League' heading appeared more than once"
+
+
+# ---------------------------------------------------------------------------
+# PostConditionsGridView — Phase 3: Save/Cancel callback tests (mocked client)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_save_callback_puts_selected_ids_and_strips_view() -> None:
+    """SaveButton aggregates ON selections and PUTs them via the client."""
+    from mom_bot.post_conditions.views import PostConditionsGridView, SaveButton
+
+    # "label" is required by short_label(); plan's example omitted it.
+    catalog = [
+        {
+            "id": 1,
+            "condition_type": "faction",
+            "label": "Only Banner Lord Champions can be used.",
+            "description": "F1",
+        },
+        {
+            "id": 2,
+            "condition_type": "faction",
+            "label": "Only High Elves Champions can be used.",
+            "description": "F2",
+        },
+        {
+            "id": 3,
+            "condition_type": "role",
+            "label": "Only HP Champions can be used.",
+            "description": "R1",
+        },
+    ]
+    siege_client = MagicMock()
+    siege_client.set_my_preferences = AsyncMock(return_value=[])
+
+    view = PostConditionsGridView(
+        catalog=catalog, preferences=[1], discord_id="42", siege_client=siege_client
+    )
+    # User toggles id 3 on, id 1 off (staged).
+    view._selections[1] = False
+    view._selections[3] = True
+
+    save_btn = next(c for c in view.children if isinstance(c, SaveButton))
+
+    interaction = MagicMock()
+    interaction.response = MagicMock()
+    interaction.response.edit_message = AsyncMock()
+    save_btn._view = view  # discord.py sets this on dispatch; emulate.
+
+    await save_btn.callback(interaction)
+
+    siege_client.set_my_preferences.assert_awaited_once_with(discord_id="42", ids=[3])
+    interaction.response.edit_message.assert_awaited_once()
+    # view=None in the call → buttons stripped.
+    _, kwargs = interaction.response.edit_message.call_args
+    assert kwargs["view"] is None
+
+
+@pytest.mark.asyncio
+async def test_cancel_callback_makes_no_client_call_and_strips_view() -> None:
+    """CancelButton does not touch the client."""
+    from mom_bot.post_conditions.views import CancelButton, PostConditionsGridView
+
+    # "label" is required by short_label(); plan's example omitted it.
+    catalog = [
+        {
+            "id": 1,
+            "condition_type": "faction",
+            "label": "Only Banner Lord Champions can be used.",
+            "description": "F1",
+        }
+    ]
+    siege_client = MagicMock()
+    siege_client.set_my_preferences = AsyncMock()
+
+    view = PostConditionsGridView(
+        catalog=catalog, preferences=[1], discord_id="42", siege_client=siege_client
+    )
+    cancel_btn = next(c for c in view.children if isinstance(c, CancelButton))
+
+    interaction = MagicMock()
+    interaction.response = MagicMock()
+    interaction.response.edit_message = AsyncMock()
+    cancel_btn._view = view
+
+    await cancel_btn.callback(interaction)
+
+    siege_client.set_my_preferences.assert_not_awaited()
+    interaction.response.edit_message.assert_awaited_once()
+    _, kwargs = interaction.response.edit_message.call_args
+    assert kwargs["view"] is None
+    assert kwargs["embed"] is None
+
+
+@pytest.mark.asyncio
+async def test_save_callback_handles_siege_web_error() -> None:
+    """SiegeWebError → user gets a retry message; view is NOT stripped."""
+    from mom_bot.post_conditions.client import SiegeWebError
+    from mom_bot.post_conditions.views import PostConditionsGridView, SaveButton
+
+    # "label" is required by short_label(); plan's example omitted it.
+    catalog = [
+        {
+            "id": 1,
+            "condition_type": "faction",
+            "label": "Only Banner Lord Champions can be used.",
+            "description": "F1",
+        }
+    ]
+    siege_client = MagicMock()
+    siege_client.set_my_preferences = AsyncMock(side_effect=SiegeWebError("boom"))
+
+    view = PostConditionsGridView(
+        catalog=catalog, preferences=[1], discord_id="42", siege_client=siege_client
+    )
+    save_btn = next(c for c in view.children if isinstance(c, SaveButton))
+
+    interaction = MagicMock()
+    interaction.response = MagicMock()
+    interaction.response.send_message = AsyncMock()
+    interaction.response.edit_message = AsyncMock()
+    save_btn._view = view
+
+    await save_btn.callback(interaction)
+
+    interaction.response.send_message.assert_awaited_once()
+    interaction.response.edit_message.assert_not_awaited()
