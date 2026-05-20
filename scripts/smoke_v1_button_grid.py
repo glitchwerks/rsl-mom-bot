@@ -1,6 +1,6 @@
 """Phase 0 smoke for issue #145 V1 button-grid path.
 
-Registers two slash commands on the dev guild:
+Registers three slash commands on the dev guild:
 
 ``/v1-smoke``
     Responds ephemerally with a :class:`discord.ui.View` carrying 20 toggle
@@ -14,6 +14,19 @@ Registers two slash commands on the dev guild:
     page 1: opt-20..opt-24).  Exercises Prev/Next navigation, cross-page
     selection persistence, and verifies the summary embed renders the
     meta-group heading **exactly once** across both pages.
+
+``/v1-smoke-real-catalog``
+    Exercises Discord button rendering against the **actual** siege-web
+    post-conditions catalog.  Synthetic smokes use short ``opt-N`` labels
+    that do not stress Discord's 80-char button-label limit or multi-button
+    row wrapping.  Real catalog labels are 20-40+ characters; this smoke
+    surfaces any row overflow before Phase 1 production code is written.
+
+    Defers immediately (catalog fetch is async), fetches the full catalog
+    via :class:`~mom_bot.post_conditions.client.SiegeWebClient`, takes the
+    first 20 conditions sorted by ``META_GROUPS`` order, pre-sets indices
+    2, 7, 14 to ``success``, and sends a single-page ephemeral view via
+    :meth:`~discord.Webhook.send` (followup).
 
 Run::
 
@@ -37,6 +50,11 @@ Confirms (verify manually in the dev guild):
       the meta-group heading appearing **only once** (B1 regression guard).
   11. Click Prev. Page 0 re-renders. opt-2, opt-7, opt-14 still show
       ``success`` style. Embed unchanged.
+  12. ``/v1-smoke-real-catalog`` defers, fetches the live catalog, and renders
+      up to 20 real-label toggle buttons + 4 nav buttons.  Three of them are
+      pre-styled ``success`` (indices 2, 7, 14 of the sorted list).  Save
+      logs selected ids and labels.  If siege-web is unreachable the command
+      responds with an ephemeral error message (no silent failure).
 """
 
 from __future__ import annotations
@@ -50,6 +68,12 @@ from discord import ButtonStyle, app_commands
 
 import mom_bot
 from mom_bot.config import load_secret
+from mom_bot.post_conditions.client import (
+    SiegeWebAuthError,
+    SiegeWebClient,
+    SiegeWebNotFoundError,
+)
+from mom_bot.post_conditions.grouping import META_GROUPS
 
 # ---------------------------------------------------------------------------
 # Tripwire — guard against running with the wrong .venv's Python.
@@ -602,6 +626,243 @@ class MultiPageSmokeView(discord.ui.View):
 
 
 # ---------------------------------------------------------------------------
+# /v1-smoke-real-catalog — single-page real label-width smoke
+# ---------------------------------------------------------------------------
+
+# Canonical sort order for real catalog conditions.  We sort by
+# (meta_order_index, condition_type, id) so the first 20 entries match what
+# the production view would show on page 0 under a META_GROUPS ordering.
+_META_ORDER: dict[str, int] = {
+    ct: group_idx
+    for group_idx, (_label, types) in enumerate(META_GROUPS)
+    for ct in types
+}
+
+# Indices (0-based) into the sorted 20-entry slice that start in ON state.
+_REAL_DEFAULT_ON: frozenset[int] = frozenset({2, 7, 14})
+
+# Error message shown when siege-web is unreachable during the smoke.
+_SIEGEWEB_UNREACHABLE_MSG = (
+    "Could not fetch the post-conditions catalog from siege-web.\n"
+    "Make sure siege-web is reachable from the dev machine and that "
+    "the ``siege-web-url`` / ``siege-web-bot-token`` secrets are "
+    "configured in Key Vault before running ``/v1-smoke-real-catalog``."
+)
+
+
+def _sort_key_real(
+    cond: dict[str, object],
+) -> tuple[int, str, int]:
+    """Return a sort key for a PostConditionResponse dict.
+
+    Sorts by ``(META_GROUPS order index, condition_type, id)`` so the
+    resulting list mirrors the canonical production page ordering.
+
+    Args:
+        cond: A PostConditionResponse dict with at minimum ``condition_type``
+            and ``id`` keys.
+
+    Returns:
+        A 3-tuple suitable for use with :func:`sorted`.
+    """
+    ct = str(cond.get("condition_type", ""))
+    return (
+        _META_ORDER.get(ct, len(META_GROUPS)),
+        ct,
+        int(cond.get("id", 0)),
+    )
+
+
+class _RealCatalogToggleButton(
+    discord.ui.Button["RealCatalogSmokeView"]
+):
+    """Toggle button for the real-catalog smoke view.
+
+    Stores the real ``condition_id`` and ``label`` from the siege-web
+    catalog.  Flips between ``success`` (ON) and ``secondary`` (OFF) and
+    refreshes the message in-place.
+
+    Attributes:
+        _condition_id: The catalog condition id (int) for this button.  Used
+            as the ``custom_id`` suffix and returned in the Save log.
+        _condition_label: Human-readable label as returned by siege-web.
+    """
+
+    def __init__(
+        self,
+        *,
+        condition_id: int,
+        label: str,
+        row: int,
+        on: bool,
+    ) -> None:
+        """Initialise a toggle button for a real catalog condition.
+
+        Args:
+            condition_id: The catalog condition id from siege-web.
+            label: The human-readable label text (up to 80 chars; Discord
+                enforces this limit on button labels).
+            row: The Discord row (0-3) to place this button in.
+            on: Whether this button starts in the ON (``success``) state.
+        """
+        super().__init__(
+            style=ButtonStyle.success if on else ButtonStyle.secondary,
+            label=label,
+            row=row,
+            custom_id=f"real-toggle-{condition_id}",
+        )
+        self._condition_id: int = condition_id
+        self._condition_label: str = label
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        """Flip the button style and refresh the message.
+
+        Toggles between :attr:`~discord.ButtonStyle.success` and
+        :attr:`~discord.ButtonStyle.secondary`, then calls
+        :meth:`~discord.InteractionResponse.edit_message` so Discord
+        re-renders the button grid.
+
+        Args:
+            interaction: The button-press interaction from Discord.
+        """
+        if self.style == ButtonStyle.success:
+            self.style = ButtonStyle.secondary
+        else:
+            self.style = ButtonStyle.success
+        await interaction.response.edit_message(view=self.view)
+
+
+class _RealCatalogSaveButton(
+    discord.ui.Button["RealCatalogSmokeView"]
+):
+    """Save button for the real-catalog smoke view.
+
+    Reads selected ids and labels from the view's toggle buttons, logs
+    them at INFO, then strips the view from the message.
+    """
+
+    def __init__(self) -> None:
+        """Initialise the Save button with primary style."""
+        super().__init__(
+            style=ButtonStyle.primary,
+            label="Save",
+            row=4,
+            custom_id="real-save",
+        )
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        """Log selected (id, label) pairs and acknowledge the message.
+
+        Args:
+            interaction: The button-press interaction from Discord.
+        """
+        view = self.view
+        selected: list[tuple[int, str]] = []
+        if view is not None:
+            for child in view.children:
+                if (
+                    isinstance(child, _RealCatalogToggleButton)
+                    and child.style == ButtonStyle.success
+                ):
+                    selected.append(
+                        (child._condition_id, child._condition_label)
+                    )
+        _logger.info(
+            "v1-smoke-real-catalog save: selected=%r", selected
+        )
+        await interaction.response.edit_message(content="ack", view=None)
+
+
+class _RealCatalogCancelButton(
+    discord.ui.Button["RealCatalogSmokeView"]
+):
+    """Cancel button for the real-catalog smoke view."""
+
+    def __init__(self) -> None:
+        """Initialise the Cancel button with danger style."""
+        super().__init__(
+            style=ButtonStyle.danger,
+            label="Cancel",
+            row=4,
+            custom_id="real-cancel",
+        )
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        """Log cancel intent and dismiss the message.
+
+        Args:
+            interaction: The button-press interaction from Discord.
+        """
+        _logger.info("v1-smoke-real-catalog cancel")
+        await interaction.response.edit_message(
+            content="cancelled", view=None
+        )
+
+
+class RealCatalogSmokeView(discord.ui.View):
+    """Legacy :class:`discord.ui.View` for ``/v1-smoke-real-catalog``.
+
+    Layout:
+    - Rows 0-3: up to 20 toggle buttons (5 per row) sourced from the live
+      siege-web catalog, sorted by ``(META_GROUPS order, condition_type,
+      id)``.
+    - Row 4: ``[Prev (disabled)] [Save] [Cancel] [Next (disabled)]`` nav
+      strip.
+
+    Buttons at sorted indices ``{2, 7, 14}`` start in ``success`` (ON) style
+    to exercise the pre-checked rendering path.
+
+    Attributes:
+        timeout: View expiry in seconds (300 — five minutes).
+    """
+
+    def __init__(
+        self,
+        conditions: list[dict[str, object]],
+    ) -> None:
+        """Construct the view from a slice of real catalog conditions.
+
+        Args:
+            conditions: Up to 20 PostConditionResponse dicts from siege-web,
+                pre-sorted.  Each dict must have ``id`` and ``label`` keys.
+        """
+        super().__init__(timeout=300)
+
+        for idx, cond in enumerate(conditions[:20]):
+            cid = int(cond["id"])
+            label = str(cond["label"])
+            self.add_item(
+                _RealCatalogToggleButton(
+                    condition_id=cid,
+                    label=label,
+                    row=idx // 5,
+                    on=(idx in _REAL_DEFAULT_ON),
+                )
+            )
+
+        self.add_item(
+            discord.ui.Button(
+                label="Prev",
+                style=ButtonStyle.secondary,
+                row=4,
+                disabled=True,
+                custom_id="real-prev",
+            )
+        )
+        self.add_item(_RealCatalogSaveButton())
+        self.add_item(_RealCatalogCancelButton())
+        self.add_item(
+            discord.ui.Button(
+                label="Next",
+                style=ButtonStyle.secondary,
+                row=4,
+                disabled=True,
+                custom_id="real-next",
+            )
+        )
+
+
+# ---------------------------------------------------------------------------
 # Bot
 # ---------------------------------------------------------------------------
 
@@ -609,14 +870,16 @@ class MultiPageSmokeView(discord.ui.View):
 class SmokeBot(discord.Client):
     """Minimal :class:`discord.Client` for the Phase 0 V1 button-grid smoke.
 
-    Registers two guild-scoped slash commands on ``setup_hook``:
+    Registers three guild-scoped slash commands on ``setup_hook``:
 
     - ``/v1-smoke`` — single-page toggle grid.
     - ``/v1-grid-smoke-multipage`` — two-page persistence and B1 regression
       guard.
+    - ``/v1-smoke-real-catalog`` — real label-width smoke against the live
+      siege-web catalog.
 
-    Both commands can coexist with the earlier V2 smoke commands in the same
-    dev guild because they use distinct names.
+    All three commands can coexist with earlier V2 smoke commands in the
+    same dev guild because they use distinct names.
 
     Attributes:
         tree: The :class:`~discord.app_commands.CommandTree` bound to this
@@ -633,10 +896,10 @@ class SmokeBot(discord.Client):
         self._guild_id: int = int(load_secret("guild-id"))
 
     async def setup_hook(self) -> None:
-        """Register and sync both smoke commands to the dev guild.
+        """Register and sync all three smoke commands to the dev guild.
 
         Called by discord.py after login, before the gateway connects.
-        Both commands are registered as guild-scoped so they appear in the
+        All commands are registered as guild-scoped so they appear in the
         dev guild within seconds rather than waiting for global propagation.
 
         Raises:
@@ -697,9 +960,105 @@ class SmokeBot(discord.Client):
                 embed=embed, view=view, ephemeral=True
             )
 
+        @self.tree.command(
+            name="v1-smoke-real-catalog",
+            description=(
+                "Phase 0 smoke — real catalog label widths (siege-web)"
+            ),
+            guild=guild,
+        )
+        async def v1_smoke_real_catalog(
+            interaction: discord.Interaction,
+        ) -> None:
+            """Respond to ``/v1-smoke-real-catalog``.
+
+            Defers immediately to avoid Discord's 3-second deadline, then
+            fetches the full siege-web catalog, sorts it in
+            ``META_GROUPS`` order, takes the first 20 entries, and sends
+            a :class:`RealCatalogSmokeView` via followup.  If the catalog
+            fetch fails the user receives an ephemeral error message.
+
+            Args:
+                interaction: The slash-command interaction from Discord.
+            """
+            _logger.info(
+                "smoke: /v1-smoke-real-catalog invoked by %s (id=%s)",
+                interaction.user,
+                interaction.user.id,
+            )
+            # Defer immediately — catalog fetch is async and may take
+            # several seconds on a cold cache (siege-web round-trip).
+            await interaction.response.defer(ephemeral=True)
+
+            # Construct the client using the same pattern as production
+            # (commands.py module docstring + main.py:L378-L381).  The
+            # client is short-lived for the smoke; no shared singleton is
+            # needed here.
+            try:
+                client = SiegeWebClient(
+                    base_url=load_secret("siege-web-url"),
+                    token=load_secret("siege-web-bot-token"),
+                )
+                catalog = await client.list_catalog(
+                    stronghold_level=None
+                )
+            except SiegeWebAuthError:
+                _logger.exception(
+                    "Auth error fetching catalog for real-catalog smoke"
+                )
+                await interaction.followup.send(
+                    f"Auth error: {_SIEGEWEB_UNREACHABLE_MSG}",
+                    ephemeral=True,
+                )
+                return
+            except SiegeWebNotFoundError:
+                _logger.exception(
+                    "404 from catalog endpoint for real-catalog smoke"
+                )
+                await interaction.followup.send(
+                    f"Catalog 404: {_SIEGEWEB_UNREACHABLE_MSG}",
+                    ephemeral=True,
+                )
+                return
+            except Exception:
+                _logger.exception(
+                    "Unexpected error fetching catalog for real-catalog"
+                    " smoke"
+                )
+                await interaction.followup.send(
+                    f"Unexpected error: {_SIEGEWEB_UNREACHABLE_MSG}",
+                    ephemeral=True,
+                )
+                return
+
+            # Sort by (META_GROUPS order index, condition_type, id) and
+            # take first 20 — single-page only; pagination is already
+            # covered by /v1-grid-smoke-multipage.
+            sorted_catalog = sorted(catalog, key=_sort_key_real)
+            first_twenty = sorted_catalog[:20]
+
+            _logger.info(
+                "v1-smoke-real-catalog: fetched %d catalog entries,"
+                " using first %d",
+                len(catalog),
+                len(first_twenty),
+            )
+            for idx, cond in enumerate(first_twenty):
+                _logger.info(
+                    "  [%02d] id=%-5s type=%-12s label=%r",
+                    idx,
+                    cond.get("id"),
+                    cond.get("condition_type"),
+                    cond.get("label"),
+                )
+
+            view = RealCatalogSmokeView(conditions=first_twenty)
+            await interaction.followup.send(view=view, ephemeral=True)
+
         await self.tree.sync(guild=guild)
         _logger.info(
-            "Synced /v1-smoke and /v1-grid-smoke-multipage to guild %d",
+            "Synced /v1-smoke, /v1-grid-smoke-multipage, and"
+            " /v1-smoke-real-catalog to guild %d",
             self._guild_id,
         )
 
@@ -709,8 +1068,9 @@ class SmokeBot(discord.Client):
         Args: none (discord.py callback — no parameters).
         """
         _logger.info(
-            "Smoke bot ready: %s (id=%s) — invoke /v1-smoke or"
-            " /v1-grid-smoke-multipage in guild %d",
+            "Smoke bot ready: %s (id=%s) — invoke /v1-smoke,"
+            " /v1-grid-smoke-multipage, or /v1-smoke-real-catalog"
+            " in guild %d",
             self.user,
             self.user.id if self.user else None,
             self._guild_id,
