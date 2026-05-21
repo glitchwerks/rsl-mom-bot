@@ -87,6 +87,7 @@ jobs:
       - name: Apply Bicep deployment
         id: apply
         run: |
+          set +e
           az deployment sub create \
             --location eastus2 \
             --template-file infra/main.bicep \
@@ -95,6 +96,7 @@ jobs:
             --name "infra-${{ github.run_id }}" \
             > deploy-output.txt 2>&1
           RC=$?
+          # Always show output in the log — critical for diagnosing failures
           cat deploy-output.txt
           exit $RC
 
