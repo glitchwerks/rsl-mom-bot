@@ -25,9 +25,19 @@ skills_relevant:
 **Authoritative contract:** `siege-web/bot/INTERFACE.md` + `siege-web/backend/tests/integration/sidecar/` (tests win on disagreement)
 **Master framework plan:** `docs/superpowers/plans/2026-05-08-mom-bot-framework.md`
 **Created:** 2026-05-20
-**Status:** APPROVED (Rev 2, 2026-05-21) — all decisions signed off; B-1 pre-flight complete; ready for sub-issue filing
+**Status:** APPROVED (Rev 3, 2026-05-21) — all decisions signed off; B-1 pre-flight complete; PR #157 review addressed; ready for sub-issue filing
 
 ## Revision log
+
+- **2026-05-21 (Rev 3, post-PR-157-review).** `claude-action-runner` review on PR #157 raised 9 items (2 BLOCK, 4 medium, 3 nit). All addressed in this revision:
+  - **B-8 monitoring scope added** to acceptance criteria (4xx/5xx rate alerts, p95 latency alert, cert-expiry monitoring, outbound-IP-change detection, App Insights wiring). Folded into B-8 rather than filed as a separate sub-issue.
+  - **Cross-repo delay fallback strategy** consolidated into a new § 7 subsection with explicit triggers (C-1/C-4 ownership unresolved, C-4 not in prod, siege-web v1.2 slip) and per-trigger actions.
+  - **B-1 → B-7 fake-mode dispatch dependency** promoted to a § 5 callout so the implicit implementation-shape coupling is visible on a skim of the dependency graph.
+  - **B-8 IP allowlist runbook** added — if 4xx spike fires, re-query siege-web env static IP and update the Bicep allowlist.
+  - **Framework plan region-lock correction** added to § 7 as a tracked follow-up item; not a blocker for this epic's sub-issues.
+  - **B-11 cutover downtime budget** added to acceptance criteria (10-30s expected; verify via App Insights against C-4 retry budget; final-503 blocks declaring cutover complete).
+  - **Dependency graph fixes**: added missing B-7 → B-10 edge; removed resolved C-2 reference.
+  - **Terminology normalized** to "bundled bot" (open compound) throughout the prose.
 
 - **2026-05-21 (Rev 2, post-sign-off).** User signed off on all seven Decisions D-1..D-7 in a focused session. § 6 cross-blocking pre-flight executed (none of #103, #120, #121, #124 block B-1). Three significant findings reshaped the plan:
   - **Env topology verified.** mom-bot in East US 2, siege-web's bot env in West US — cross-region, contradicting the framework plan's "both in eastus2 (locked 2026-05-08)" claim. Framework plan needs amendment. See § 2 for verified region/IP details.
@@ -134,7 +144,7 @@ Internal DNS within a Container Apps environment only resolves within a single e
 2. The framework plan's "inherit existing token" pillar is already accepted for Epic 4's reminder-bot cutover; the same machinery applies here (the gateway is single-holder at any instant).
 3. The "no overlap window" rule named in the epic body matches Epic 4's cutover-time-of-day rule (Thursday/Friday post-13:00 UTC) — both reminders for the week have already fired, minimizing operational risk.
 
-**Operational rule (revised, post-review).** The stop-bundled-bot → start-mom-bot sequence is **the same operator action** in the runbook (D-7 below). Discord's gateway will accept the new connection within seconds of the old session closing, but the sidecar HTTP surface is unavailable for the duration of the swap (10-30s typical).
+**Operational rule (revised, post-review).** The stop bundled bot → start mom-bot sequence is **the same operator action** in the runbook (D-7 below). Discord's gateway will accept the new connection within seconds of the old session closing, but the sidecar HTTP surface is unavailable for the duration of the swap (10-30s typical).
 
 The **previous version of this plan claimed** siege-web's `BotClient` "retries 503s with backoff per `INTERFACE.md:180-194`." That claim is incorrect on two counts:
 
@@ -173,7 +183,7 @@ A 10-30s gateway gap means in-flight `notify` / `post_message` / `post_image` / 
 1. Coupling the work timelines is unnecessary — mom-bot's sidecar can be deployed and exercised against siege-web's test instance long before cutover, identical to how Epic 2 verification was sequenced in the framework plan ("siege-web's `DISCORD_BOT_API_URL` pointed at mom-bot's **dev** URL — exercise all 6 endpoints" — framework plan § Verification per epic).
 2. **C-1 updated scope (verified 2026-05-21).** siege-web's `useExternalSidecar` and `externalBotApiUrl` Bicep parameters already exist (`infra/modules/container-apps.bicep:209`). C-1 collapses from "add the parameter" to **verify-and-document**: confirm `externalBotApiUrl` accepts mom-bot's `https://<env-default-domain>` URL, optionally relax the "HTTPS required outside dev" guard if a future internal-DNS path is desired (document the same-env vs cross-env case in INTERFACE.md). No mandatory siege-web Bicep change required for v1.0 cutover.
 
-**Cross-repo follow-up.** Sub-issue C-1 (verify-and-document — see updated spec in § 4); sub-issue C-2 closed in-session.
+**Cross-repo follow-up.** Sub-issue C-1 (verify-and-document — see updated spec in § 4); sub-issue C-2 closed in-session. For the formal fallback strategy if siege-web cannot deliver C-1 or C-4 on schedule, see § 7 "Cross-repo delay fallback strategy."
 
 **Source.** `INTERFACE.md:122-134`; framework plan § Verification per epic.
 
@@ -358,7 +368,7 @@ Sub-issues use the prefix `epic-128/` in titles to group them. Each spec include
   - **Decision:** mom-bot's `FakeDiscordClient` lives at `src/mom_bot/sidecar/fake_discord.py` (shipped, gated by `MOM_BOT_TEST_MODE`), matching siege-web's `bot/app/fake_discord.py` structure. No live code paths are affected because dispatch is env-var-gated.
   - **`build_app` fake-mode dispatch lands in B-1, not here.** B-7 builds on the signature B-1 already extended. If `build_app` still takes only `discord.Guild` when B-7 starts, the implementer must retrofit B-1 first — flag that to the user before continuing. The expected B-1 signature is `build_app(api_key, client, session_factory)` where `client` is either `discord.Client` (prod) or `FakeDiscordClient` (test mode), with `is_ready()` and `guilds`/`get_guild(...)` duck-typed on both.
 
-  **Out of scope.** Changing siege-web's bundled-bot harness. Cross-repo CI integration (separate concern).
+  **Out of scope.** Changing siege-web's bundled bot harness. Cross-repo CI integration (separate concern).
 
 - **Depends on:** B-1 through B-6 (all 7 endpoints implemented).
 - **Cross-repo prereqs:** read-only dependency on siege-web's integration suite (no PR against siege-web required for this sub-issue).
@@ -383,6 +393,14 @@ Sub-issues use the prefix `epic-128/` in titles to group them. Each spec include
   - Minimum TLS 1.2 enforced.
   - Bearer-token auth via `prod-discord-bot-api-key` (B-9 provisions).
   - [ ] **Verify deploy FIC has Container App contributor role at merge time** — soft note: #103 affects deployment RBAC scope for the FIC that deploys this Container App change. No friction either way (existing single FIC handles B-8 fine if #103 hasn't landed; verify role scope if #103 has landed first).
+  - **Observability.**
+    - **Azure Monitor / App Insights wired** to the Container App's ingress — reuse mom-bot's existing Application Insights workspace (do not provision a new one).
+    - **Alert: 4xx rate spike** — could indicate IP allowlist misconfiguration or Bearer-token rotation drift.
+    - **Alert: 5xx rate** — sidecar process broken or Container App unhealthy.
+    - **Alert: p95 latency degradation** — cross-region path (West US → East US 2) degraded; baseline ~50-70ms per D-2.
+    - **Certificate-expiry monitoring** — the auto-managed cert renews automatically; alert on imminent expiry as a defense-in-depth signal.
+    - **Outbound IP-change detection for siege-web's env** — if siege-web recreates its Container Apps environment the static outbound IP (`20.245.166.6`) will change, silently breaking the allowlist. Implement a periodic check (e.g. weekly GitHub Actions cron, or App Insights alert on 403 spike) so IP drift is caught rather than silently dropped.
+  - **Operational runbook — IP allowlist drift.** If the App Insights 4xx alert fires and the pattern suggests allowlist misconfiguration (403 responses from siege-web's expected source): (1) re-run `az containerapp env show --name siege-web-cae-prod-yf3fl2t3yxmtk --resource-group siege-web-prod --query properties.staticIp -o tsv` to get the current outbound IP; (2) if the IP has changed, update the Bicep allowlist and redeploy. Capture this as a named runbook section in `docs/operations/epic-128-cutover.md` (that file lands in B-11; cross-link from there).
 
 - **Depends on:** B-1 (sidecar exists). Can land in parallel with B-2 through B-7.
 - **Cross-repo prereqs:** none (C-2 closed in-session; D-2 settled as Mode 2).
@@ -419,7 +437,7 @@ Sub-issues use the prefix `epic-128/` in titles to group them. Each spec include
   **Acceptance criteria.**
   - siege-web dev backend's `DISCORD_BOT_API_URL` is temporarily pointed at mom-bot's dev sidecar URL.
   - All 7 endpoints exercised via the existing siege-web admin flows that call them (send a DM via `/api/notify`, post a message via siege-web's notify UI, post an image, list members, look up a single member).
-  - `/api/version` reports `mom-bot v0.x.y` (not the bundled-bot version).
+  - `/api/version` reports `mom-bot v0.x.y` (not the bundled bot version).
   - `/api/health` reports `bot_connected: true` once mom-bot's gateway is up.
   - No 502/503 errors from mom-bot's translation layer beyond expected ones (DM-blocked, etc.).
   - Findings logged in this sub-issue's comments; any drift from `INTERFACE.md` blocks Phase 9.
@@ -451,9 +469,9 @@ These are filed against `glitchwerks/rsl-siege-manager`, cross-linked from this 
 - **Depends on:** none.
 - **Cross-repo prereqs:** mom-bot's Container App URL confirmed (B-8 settles the FQDN).
 
-#### C-2. Confirm/document siege-web bundled-bot deployment shape (read-only, may be a comment-only Q&A)
+#### C-2. Confirm/document siege-web bundled bot deployment shape (read-only, may be a comment-only Q&A)
 
-- **Title (siege-web):** `docs(epic-128-sibling): document bundled-bot deployment shape for mom-bot cutover planning`
+- **Title (siege-web):** `docs(epic-128-sibling): document bundled bot deployment shape for mom-bot cutover planning`
 - **Labels (siege-web):** `docs`, `cross-repo`
 - **Body:**
 
@@ -511,7 +529,7 @@ These are filed against `glitchwerks/rsl-siege-manager`, cross-linked from this 
 
 #### B-11. Production cutover runbook + execution
 
-- **Title:** `chore(epic-128): execute mom-bot ↔ siege-bundled-bot prod cutover`
+- **Title:** `chore(epic-128): execute mom-bot ↔ siege bundled bot prod cutover`
 - **Labels:** `epic-128`, `cutover`, `infra`
 - **Body:**
 
@@ -528,6 +546,7 @@ These are filed against `glitchwerks/rsl-siege-manager`, cross-linked from this 
     - **Verified-quiet window check.** Before stopping the bundled bot, query App Insights for sidecar request volume over the previous 60 seconds. The "stop" step is gated on observing zero in-flight calls (or a count low enough that C-4's retry budget covers them). Document the exact KQL query and the pass/fail threshold in the runbook. **The wall clock is not the trigger — the quiet-window observation is.**
     - **Step-by-step.** (1) Verify-quiet check; (2) stop bundled bot; (3) verify Discord gateway session released; (4) start mom-bot's sidecar serving 7 endpoints; (5) flip siege-web `DISCORD_BOT_API_URL`; (6) smoke each endpoint from siege-web admin UI.
     - **Rollback.** Re-flip the env var; re-enable bundled bot's Container App. Rollback is one-step because C-4 already protects callers from the brief outage during rollback itself.
+  - **Expected sidecar HTTP unavailability during gateway swap: 10-30 seconds.** Post-cutover verification: query App Insights for the cutover window and confirm that (a) no sidecar call exceeded C-4's retry budget (3 attempts, ~5.5s max total wait), and (b) no call returned a final 503 to a `BotClient` caller. Any final-503 in the post-cutover window blocks declaring the cutover complete and triggers the rollback step.
   - Cutover executed; all 7 endpoints verified live in prod within 60 minutes of switch.
   - Post-cutover monitoring window: 48 hours of App Insights latency + error-rate review before declaring epic complete.
 
@@ -540,7 +559,7 @@ These are filed against `glitchwerks/rsl-siege-manager`, cross-linked from this 
 
 #### B-12. Decommission siege-web's bundled bot resources
 
-- **Title (siege-web):** `chore(epic-128-sibling): decommission bundled-bot Container App + tests after mom-bot cutover`
+- **Title (siege-web):** `chore(epic-128-sibling): decommission bundled bot Container App + tests after mom-bot cutover`
 - **Labels (siege-web):** `infra`, `cleanup`, `cross-repo`
 - **Body:**
 
@@ -550,7 +569,7 @@ These are filed against `glitchwerks/rsl-siege-manager`, cross-linked from this 
   - siege-web Bicep no longer declares the bundled bot's deployment resource; `useExternalSidecar` parameter retained for documentation but its `false` branch is now no-op (or the parameter is removed entirely — siege-web maintainer's call).
   - `siege-web/bot/` source tree retained (it remains the conformance reference); only the deploy step is removed.
   - Integration test suite at `siege-web/backend/tests/integration/sidecar/` retained verbatim.
-  - Rollback ability documented: re-add the bundled-bot deploy step if mom-bot needs to be replaced.
+  - Rollback ability documented: re-add the bundled bot deploy step if mom-bot needs to be replaced.
 
 - **Depends on:** B-11 + 7-14 day stability window.
 - **Cross-repo prereqs:** mom-bot is the sole sidecar in prod with no reverts.
@@ -585,15 +604,17 @@ B-1 (version + health + auth scaffold + build_app fake-mode dispatch)
  ├─→ B-2 ─→ B-5 (members) ─→ B-6 (members/{id})
  └─→ B-8 (Bicep ingress) ─→ B-10 (dev smoke)
 B-7 (conformance harness) requires B-1..B-6
+B-7 ─→ B-10 (dev smoke also requires conformance harness green)
 B-9 (KV secret) — independent, lands early
 C-1 (siege-web Bicep parameter) — siege-web side, parallel to B-2..B-7, CRITICAL PATH TO B-11
-C-2 (siege-web deployment shape Q&A) — gates B-8 and C-1
 C-3 (INTERFACE.md update) — after B-7 + B-10 green
 C-4 (BotClient 503 retries) — siege-web side, HARD GATE on B-11 (see D-3)
 B-11 (cutover) requires B-10 + C-1 + C-4-in-prod
 B-12 (siege-web cleanup) requires B-11 + stability window
 B-13 (close-out) requires B-11 + B-12
 ```
+
+**Cross-issue dependency — `build_app` fake-mode dispatch.** B-1 must land the signature extension to `build_app(api_key, client, session_factory)` (accepting either `discord.Client` or `FakeDiscordClient`) before B-7's implementer begins porting the conformance harness. The graph edge `B-1 → B-7` is structurally correct, but the implementation-shape coupling is implicit; review the existing notes in B-1 "Technical notes" and B-7 "Technical notes" before starting either sub-issue.
 
 ## 6. Blocking dependencies on other v1.0 milestone issues
 
@@ -622,6 +643,27 @@ Items requiring direct sign-off or action from the siege-web maintainer before s
 - [ ] **Agree on integration test suite portability convention** — siege-web's tests stay canonical, mom-bot copies them. Acceptable? (gates B-7)
 - [ ] **Cutover-window slot** — pick a specific Thursday or Friday post-13:00 UTC. (gates B-11)
 - [ ] **Post-cutover cleanup ownership** — siege-web maintainer drives C-3 + B-12. Confirm. (gates B-12)
+- [ ] **Framework plan correction** — `docs/superpowers/plans/2026-05-08-mom-bot-framework.md` claims region-lock to `eastus2` (Pre-Epic-0 resolution). Verified incorrect 2026-05-21 — siege-web's bot env is in West US. File a small docs PR against the framework plan to correct this. Not a blocker for any sub-issue in this epic; flagged for separate tracking.
+
+### Cross-repo delay fallback strategy
+
+If siege-web cannot deliver C-1 or C-4 on the timeline B-11 requires, the following triggers and actions apply.
+
+**Triggers.**
+
+- **(a) C-1/C-4 ownership unresolved** — siege-web maintainer cannot confirm ownership of C-1 or C-4 within 2 weeks of the planned cutover date.
+- **(b) C-4 not in prod** — C-4 has not landed on siege-web `main` by 1 week before the planned B-11 window.
+- **(c) siege-web v1.2 slip** — siege-web v1.2 ship date slips past the planned B-11 window.
+
+**Actions per trigger.**
+
+- **C-1/C-4 ownership unresolved (trigger a):** Postpone B-11. Phases 2-8 (B-1..B-10) continue on schedule — they do not depend on siege-web. File a follow-up issue tracking "B-11 cutover blocked on siege-web cross-repo work" so it is not lost in backlog.
+- **C-4 not yet in prod (trigger b):** Postpone B-11. Without C-4's BotClient retries, the cutover risks silent call drops during the gateway swap (per D-3). No mom-bot-side workaround exists.
+- **siege-web v1.2 slip (trigger c):** Postpone B-11. mom-bot's sidecar can be exercised against siege-web dev (B-10) regardless, but prod cutover requires v1.2's `externalBotApiUrl` to be set.
+
+**Communication.** Post a comment on epic #128 naming the blocker, the new estimated cutover window, and which mom-bot-side work continues unblocked.
+
+*(D-5's "Cross-repo follow-up" paragraph references this subsection for the formal fallback logic.)*
 
 ## 8. Citations & verifications
 
