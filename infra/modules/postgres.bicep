@@ -43,6 +43,7 @@ param managedIdentityPrincipalId string
 param managedIdentityName string
 
 @description('Outbound IP addresses of the Container App (ca-mom-bot). One firewall rule is created per IP so all egress IPs are covered even if Azure assigns more than one.')
+@minLength(1)
 param containerAppOutboundIps array
 
 resource pg 'Microsoft.DBforPostgreSQL/flexibleServers@2024-08-01' = {
@@ -88,6 +89,7 @@ resource db 'Microsoft.DBforPostgreSQL/flexibleServers/databases@2024-08-01' = {
 // Firewall: one rule per Container App outbound IP (issue #120 Part 2).
 // Resolved at deploy time from containerApp.outputs.outboundIpAddresses so
 // the rules stay correct if Azure assigns additional egress IPs in future.
+// @batchSize(1) serializes rule creation to avoid ARM throttling when many IPs exist.
 @batchSize(1)
 resource fwCaOutbound 'Microsoft.DBforPostgreSQL/flexibleServers/firewallRules@2024-08-01' = [
   for (ip, index) in containerAppOutboundIps: {
