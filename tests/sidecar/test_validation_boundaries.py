@@ -157,15 +157,17 @@ class TestSidecarValidationReturns422:
     per-boundary in the app factory (issue #187).
     """
 
-    def test_members_list_missing_auth_is_401_not_422(self) -> None:
-        """Sanity: missing auth on /api/members is 401, not a validation error.
+    def test_members_list_missing_auth_is_403_not_422(self) -> None:
+        """Sanity: missing auth on /api/members is 403, not a validation error.
 
-        Ensures the 401 path fires before validation, so we do not confuse
-        an auth rejection with a validation response.
+        Ensures the auth check fires before validation, so we do not confuse
+        an auth rejection with a validation response.  Missing the
+        Authorization header entirely → 403 (post-#188 contract); a wrong
+        token → 401 + WWW-Authenticate: Bearer.
         """
         client = _make_client()
         response = client.get("/api/members")
-        assert response.status_code == 401
+        assert response.status_code == 403
 
     def test_member_detail_non_numeric_path_returns_422(self) -> None:
         """Non-numeric path param on /api/members/{id} → 422.
