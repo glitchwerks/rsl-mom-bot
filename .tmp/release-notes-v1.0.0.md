@@ -2,6 +2,8 @@
 
 *Date TBD (will be set at tag-cut time per #217)*
 
+> **Status:** Draft. At the time of this draft, `pyproject.toml` is `1.0.0-rc.0`. The `-rc.0` → `1.0.0` bump lands as part of #217 in the same commit that gets tagged. These notes describe the final v1.0.0 release; promote to `docs/releases/v1.0.0.md` at tag-cut time.
+
 ---
 
 ## What this release is
@@ -70,14 +72,14 @@ This line is the fastest way to catch a cross-environment misconfiguration (e.g.
 
 ## Upgrade notes
 
-v1.0.0 is structurally identical to `main` at the tagged SHA (`3389b2a`). There is no behavioral delta between the `:main` image at tag time and `:v1.0.0`.
+v1.0.0 will be tagged at the commit that lands the `1.0.0-rc.0` → `1.0.0` bump in `pyproject.toml`. Apart from that single-line version-string bump, the v1.0.0 release is structurally identical to current `main`. There is no behavioral delta between the `:main` image at tag time and `:v1.0.0`.
 
 - **No code or contract changes from the current `:main` image.** Operators running `:main` in prod are already running what v1.0.0 ships.
 - **Pin optionally.** Operators who want a stable pinned image may switch to `:v1.0.0`. The `:main` image stream continues to track `main` as before.
 - **No database migration required.** The schema at v1.0.0 is what is already running in prod. `alembic upgrade head` is a no-op on a current deployment.
 - **No environment variable changes required.** No new env vars, no renamed env vars, no changed defaults.
 
-Deploying v1.0.0 to prod is a standard image-swap via `deploy.yml` `workflow_dispatch` with the tagged SHA. See `RELEASING.md` for the tag-push and deploy sequence.
+Deploying v1.0.0 to prod is a standard image-swap via `deploy.yml` `workflow_dispatch`. Dispatch the workflow with `commit_sha: <tagged-SHA>` to deploy that specific commit, or leave `commit_sha` blank to deploy the commit that the `v1.0.0` tag points to. See `RELEASING.md` for the tag-push and deploy sequence.
 
 ---
 
@@ -101,4 +103,4 @@ The day-role-sync producer on the siege-web side ships dark behind `DAY_ROLE_SYN
 
 ---
 
-*Source CHANGELOG entries: `## [1.0.0] - 2026-05-26` in `CHANGELOG.md`. Verifiable via `git -C I:/games/raid/mom-bot/.worktrees/release-notes-216 ls-tree HEAD -- CHANGELOG.md`.*
+*Source CHANGELOG entries: `## [1.0.0] - 2026-05-26` in `CHANGELOG.md` at repo root.*
