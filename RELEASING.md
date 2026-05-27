@@ -38,16 +38,15 @@ Every PR merged since the previous tag should have an entry under `## [Unrelease
 - Sub-section order: `### Added`, `### Changed`, `### Fixed`, `### Infrastructure`, `### Documentation`. Omit empty sub-sections.
 - Keep-a-Changelog format: https://keepachangelog.com/
 
-### 3. Bump the version in two places
+### 3. Bump the version in `pyproject.toml`
 
-mom-bot's version is defined in two places that must stay in sync:
+mom-bot's version has a single source of truth: `pyproject.toml`'s `[project] version` field (line 7).
 
-- **`pyproject.toml`** — `[project] version = "X.Y.Z"` (line 6)
-- **`src/mom_bot/__init__.py`** — `__version__ = "X.Y.Z"` (line 7)
+- **`pyproject.toml`** — `[project] version = "X.Y.Z"` (line 7)
 
-`__version__` is what `/ping` and `GET /api/version` report at runtime. Both files must be updated in the same commit as the CHANGELOG promotion.
+`src/mom_bot/__init__.py` resolves `__version__` at import time via `importlib.metadata.version("mom-bot")`, so it picks up whatever is installed. `/ping` and `GET /api/version` report this resolved value at runtime — no separate file edit is required, but the package must be reinstalled (`uv pip install -e .`) for the new version to be visible to a running interpreter in a dev checkout. CI and the prod image build install from the bumped `pyproject.toml`, so they pick up the new value automatically.
 
-> **Note:** These two fields are currently hardcoded independently. If the project is later wired to use `importlib.metadata.version("mom-bot")` at runtime, only `pyproject.toml` will need updating. Until that change lands, update both.
+Bump the version in the same commit as the CHANGELOG promotion.
 
 ### 4. Open a release PR
 
@@ -106,7 +105,7 @@ git push origin vX.Y.Z
 
 ### Deploy is separate
 
-The tag does not deploy to prod. When you are ready to promote the new version, dispatch `deploy.yml` with the tagged SHA (or leave `commit_sha` blank to use the tag's HEAD). The deploy workflow verifies the image exists in GHCR, runs `alembic upgrade head`, and updates the Azure Container App.
+The tag does not deploy to prod. When you are ready to promote the new version, dispatch `deploy.yml` with the tagged SHA (or leave `commit_sha` blank to use the commit the tag points to). The deploy workflow verifies the image exists in GHCR, runs `alembic upgrade head`, and updates the Azure Container App.
 
 ## Versioning policy
 
@@ -133,21 +132,23 @@ When in doubt, prefer the higher bump.
 
 A hotfix is a patch release branched from a release tag rather than from `main`. Use this when `main` has unreleased breaking work that should not ship with the fix.
 
+The hotfix version is the next patch bump from the tag you branched from — e.g. if you're hotfixing `v1.2.3`, the hotfix tag is `v1.2.4`. (Semver uses `.` as the bump separator; `+` is reserved for build metadata and is NOT how patch increments are spelled.)
+
 ```bash
-# Create a hotfix branch from the release tag
-git checkout -b hotfix/vX.Y.Z+1 vX.Y.Z
+# Create a hotfix branch from the release tag (example: hotfixing v1.2.3 → v1.2.4)
+git checkout -b hotfix/v1.2.4 v1.2.3
 
 # Cherry-pick the fix commit(s) from main
 git cherry-pick <fix-sha>
 
 # Apply the same pre-tag checklist:
 # - Add a CHANGELOG entry under the new version
-# - Bump version in pyproject.toml and src/mom_bot/__init__.py
+# - Bump version in pyproject.toml
 # - Push the branch; open a PR targeting main (for the record and CI)
 # - After CI is green and smoke passes, tag from this branch
 
-git tag -a vX.Y.Z+1 -m "vX.Y.Z+1"
-git push origin vX.Y.Z+1
+git tag -a v1.2.4 -m "v1.2.4"
+git push origin v1.2.4
 ```
 
 After the hotfix tag is pushed, merge the hotfix branch into `main` so the fix is not lost in the next regular release. If the cherry-pick conflicts with ongoing work, resolve the conflict in the merge rather than skipping it.
