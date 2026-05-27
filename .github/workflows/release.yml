@@ -29,6 +29,7 @@ jobs:
 
     outputs:
       version: ${{ steps.preflight.outputs.version }}
+      changelog_version: ${{ steps.preflight.outputs.changelog_version }}
       is_prerelease: ${{ steps.preflight.outputs.is_prerelease }}
 
     steps:
