@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+<!-- Add a "### 📣 Highlights" sub-section here before cutting the next release.
+     See RELEASING.md § "Discord Highlights convention" for what to write there. -->
+
 ## [1.0.0] - 2026-05-26
 
 ### Added

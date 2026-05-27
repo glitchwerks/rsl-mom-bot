@@ -8,6 +8,39 @@ Authoritative release process for the repo's `v*` tags. This document exists bec
 
 Pushing a `v*` tag triggers `.github/workflows/release.yml` (added in #215), which publishes two artifacts: a GitHub Release page and an immutable GHCR image tagged `:vX.Y.Z` at `ghcr.io/glitchwerks/mom-bot`. The mutable `:main` tag continues to track HEAD as before — the versioned tag is an additional pointer to the same SHA, not a replacement. Deploying the new image to the Azure Container App is a separate step, performed manually via `workflow_dispatch` on `.github/workflows/deploy.yml`. The tag-push does not trigger a deploy. You decide when prod gets the new image.
 
+Publishing the GitHub Release (clicking "Publish release" in the GitHub UI or using `gh release create`) also triggers `.github/workflows/notify-discord-release.yml`, which posts an announcement embed to the Discord channel configured via the `DISCORD_RELEASE_WEBHOOK_URL` repo secret. The notification fires on initial publication only — editing the release body afterward does not re-post.
+
+### Discord Highlights convention
+
+The Discord announcement includes a description pulled from a `### 📣 Highlights` sub-section inside the release's CHANGELOG entry. This is the author's opportunity to write a plain-language, member-facing summary — distinct from the engineering detail in the keep-a-changelog sub-sections (`### Added`, `### Fixed`, etc.).
+
+**What to put in Highlights:**
+- One short paragraph or 3–5 bullets describing user-facing impact.
+- What changed for members/operators — not implementation minutiae.
+- Enough context for someone not following the PR trail to understand why this release matters.
+
+**How to add it:**
+Add a `### 📣 Highlights` sub-section under the version heading in `CHANGELOG.md` before opening the release PR. The `release.yml` workflow copies the full version section into the GitHub Release body, so the Highlights block flows through automatically.
+
+```markdown
+## [X.Y.Z] - YYYY-MM-DD
+
+### 📣 Highlights
+
+Brief member-facing summary of what changed and why it matters.
+
+### Added
+
+- Engineering detail here.
+```
+
+The emoji prefix (`📣`) is optional — `### Highlights` (without emoji) also works. If no Highlights section is present when the release publishes, the Discord post falls back to: `"<tag> published. View notes: <url>"`. The notification is never silently dropped.
+
+**Soft cap:** Descriptions longer than 1 500 characters are truncated and a "View full release notes" link is appended. Keep Highlights concise.
+
+**Required repo secret:**
+`DISCORD_RELEASE_WEBHOOK_URL` must be set as a repository secret. To create a Discord webhook: open the target channel → Edit Channel → Integrations → Webhooks → New Webhook → Copy Webhook URL. Add that URL at `https://github.com/glitchwerks/mom-bot/settings/secrets/actions`.
+
 ## Pre-tag checklist
 
 Run through every item **before** running `git tag`. The metadata updates (CHANGELOG, version) must land in a commit on `main` that the tag will point at. Tagging before these steps produces an inconsistency between the image label, the `/api/version` response, and the in-app changelog — the failure mode this document exists to prevent.
