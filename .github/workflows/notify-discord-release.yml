@@ -1,0 +1,166 @@
+# notify-discord-release.yml
+#
+# Posts a Discord embed to the release-announcements channel whenever a
+# GitHub Release is published on this repo.
+#
+# Required secret:
+#   DISCORD_RELEASE_WEBHOOK_URL  — Discord Incoming Webhook URL.
+#   To create one: Discord Server Settings → Integrations → Webhooks → New Webhook.
+#   Copy the webhook URL and add it as a repository secret at:
+#   https://github.com/glitchwerks/mom-bot/settings/secrets/actions
+#
+# Spec: glitchwerks/rsl-mom-apps#17 (coord) / glitchwerks/mom-bot#226 (impl)
+
+name: Notify Discord on Release
+
+on:
+  release:
+    types: [published]
+
+jobs:
+  notify:
+    name: Post Discord release announcement
+    runs-on: ubuntu-latest
+    # This workflow only needs to read repo contents (for the extract script).
+    permissions:
+      contents: read
+
+    steps:
+      # -----------------------------------------------------------------------
+      # Idempotency guard (coord spec §R7):
+      # GitHub fires the "published" event both on initial publication AND when
+      # a release body is edited and re-published.  We only want to post once —
+      # on the original publication.  If created_at != published_at the event
+      # is a re-publication (body edit) — skip it with an explanatory notice.
+      # -----------------------------------------------------------------------
+      - name: Check idempotency guard
+        id: guard
+        run: |
+          CREATED_AT="${{ github.event.release.created_at }}"
+          PUBLISHED_AT="${{ github.event.release.published_at }}"
+
+          if [ "$CREATED_AT" != "$PUBLISHED_AT" ]; then
+            echo "::notice::Skipping Discord notification — this is a re-publication of an existing release (created_at=$CREATED_AT, published_at=$PUBLISHED_AT). Discord was already notified on initial publication."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Validate required secrets
+        if: steps.guard.outputs.skip == 'false'
+        run: |
+          if [ -z "${{ secrets.DISCORD_RELEASE_WEBHOOK_URL }}" ]; then
+            echo "::error::DISCORD_RELEASE_WEBHOOK_URL secret is not set. See RELEASING.md § Discord Highlights convention for setup instructions."
+            exit 1
+          fi
+
+      - name: Checkout repository
+        if: steps.guard.outputs.skip == 'false'
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+
+      # -----------------------------------------------------------------------
+      # Extract the Highlights section from the release body (coord spec §R4).
+      # Falls back to a minimal description when Highlights is absent (§R6).
+      # Applies the 1500-char soft-cap and truncates if needed (§R5).
+      # -----------------------------------------------------------------------
+      - name: Extract Highlights section
+        if: steps.guard.outputs.skip == 'false'
+        id: highlights
+        env:
+          RELEASE_BODY: ${{ github.event.release.body }}
+          TAG_NAME: ${{ github.event.release.tag_name }}
+          HTML_URL: ${{ github.event.release.html_url }}
+        run: |
+          # Pass the release body through the extraction script.
+          # The script reads from stdin and writes the final description to stdout.
+          DESCRIPTION="$(printf '%s' "$RELEASE_BODY" | bash scripts/extract-highlights.sh "$TAG_NAME" "$HTML_URL")"
+
+          # Write to GITHUB_OUTPUT using a heredoc delimiter so that multi-line
+          # values and special characters are preserved correctly.
+          {
+            echo "description<<HIGHLIGHTS_EOF"
+            printf '%s\n' "$DESCRIPTION"
+            echo "HIGHLIGHTS_EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      # -----------------------------------------------------------------------
+      # Build embed and POST to Discord webhook (coord spec §R3).
+      #
+      # Embed shape:
+      #   title       — "mom-bot <tag>" or "[pre-release] mom-bot <tag>" (§R8)
+      #   url         — GitHub Release URL
+      #   description — Highlights text (or fallback)
+      #   color       — 0x57F287 (Discord green) to distinguish mom-bot releases
+      #                 from siege-web releases (which will use a different color)
+      #   footer.text — "Published by <author>" (omitted if author absent)
+      #   timestamp   — release.published_at (ISO 8601)
+      #
+      # Uses raw curl + jq (both pre-installed on ubuntu-latest).
+      # No third-party Actions are used for the POST step — keeping it auditable.
+      # -----------------------------------------------------------------------
+      - name: Post Discord embed
+        if: steps.guard.outputs.skip == 'false'
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_RELEASE_WEBHOOK_URL }}
+          TAG_NAME: ${{ github.event.release.tag_name }}
+          HTML_URL: ${{ github.event.release.html_url }}
+          IS_PRERELEASE: ${{ github.event.release.prerelease }}
+          AUTHOR_LOGIN: ${{ github.event.release.author.login }}
+          PUBLISHED_AT: ${{ github.event.release.published_at }}
+          DESCRIPTION: ${{ steps.highlights.outputs.description }}
+        run: |
+          # Build the embed title, prefixing [pre-release] when applicable (§R8).
+          if [ "$IS_PRERELEASE" = "true" ]; then
+            EMBED_TITLE="[pre-release] mom-bot $TAG_NAME"
+          else
+            EMBED_TITLE="mom-bot $TAG_NAME"
+          fi
+
+          # Build the footer object; omit if author is absent (defensive per §R3).
+          if [ -n "$AUTHOR_LOGIN" ]; then
+            FOOTER_JSON="$(jq -n --arg text "Published by $AUTHOR_LOGIN" '{"text": $text}')"
+          else
+            FOOTER_JSON="null"
+          fi
+
+          # Construct the full Discord webhook payload using jq so that all
+          # string values are safely escaped (no manual JSON quoting).
+          #
+          # color: 0x57F287 = 5,763,719 decimal
+          #   Discord green — chosen to visually distinguish mom-bot announcements
+          #   from siege-web announcements (which will use a different palette).
+          #   Reference: https://discord.com/developers/docs/reference#color
+          PAYLOAD="$(jq -n \
+            --arg title       "$EMBED_TITLE" \
+            --arg url         "$HTML_URL" \
+            --arg description "$DESCRIPTION" \
+            --arg timestamp   "$PUBLISHED_AT" \
+            --argjson footer  "$FOOTER_JSON" \
+            '{
+              embeds: [{
+                title:       $title,
+                url:         $url,
+                description: $description,
+                color:       5763719,
+                footer:      (if $footer != null then $footer else empty end),
+                timestamp:   $timestamp
+              }]
+            }'
+          )"
+
+          # POST to Discord.  Fail the step on non-2xx so CI shows a red check
+          # rather than silently dropping the notification.  Capture the response
+          # body so that on failure the error reason is visible in the workflow log.
+          RESPONSE_BODY="$(mktemp)"
+          HTTP_STATUS="$(curl -s -o "$RESPONSE_BODY" -w "%{http_code}" \
+            -H "Content-Type: application/json" \
+            -d "$PAYLOAD" \
+            "$DISCORD_WEBHOOK_URL")"
+
+          if [ "$HTTP_STATUS" -lt 200 ] || [ "$HTTP_STATUS" -ge 300 ]; then
+            echo "::error::Discord webhook returned HTTP $HTTP_STATUS — notification not delivered."
+            echo "Response body: $(cat "$RESPONSE_BODY")"
+            exit 1
+          fi
+
+          echo "Discord notification delivered (HTTP $HTTP_STATUS)."
