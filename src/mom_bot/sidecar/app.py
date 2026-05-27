@@ -136,6 +136,10 @@ from fastapi import Path as FastAPIPath
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, model_validator
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
+from slowapi.middleware import SlowAPIASGIMiddleware
+from slowapi.util import get_remote_address
 from sqlalchemy.orm import Session, sessionmaker
 
 from mom_bot import __version__ as _pkg_version
@@ -376,6 +380,48 @@ def build_app(
     app = FastAPI(title="mom-bot sidecar", docs_url=None, redoc_url=None)
     _sidecar_sub = FastAPI(docs_url=None, redoc_url=None)
     _role_sync_sub = FastAPI(docs_url=None, redoc_url=None)
+
+    # ------------------------------------------------------------------
+    # Rate limiting — issue #209.
+    #
+    # SlowAPIASGIMiddleware is added to _role_sync_sub so that rate-limit
+    # checks run in the ASGI layer before any route handler or Depends()
+    # dependency (including the bearer-auth dependency) is invoked.
+    # This ensures a pre-auth flood is stopped at the limiter without
+    # exercising the token-check path.
+    #
+    # The limiter is also attached to the parent ``app`` as
+    # ``app.state.limiter`` so tests can access it via
+    # ``client.app.state.limiter`` for storage resets between test runs.
+    #
+    # Limits are env-tunable:
+    #   RATE_LIMIT_PER_IP  — per source-IP limit (default "60/minute")
+    #   RATE_LIMIT_TOTAL   — aggregate across all IPs (default "200/minute")
+    #
+    # In-memory storage is intentional (maxReplicas=1 per issue #209);
+    # no Redis or distributed backend is used.
+    # ------------------------------------------------------------------
+
+    _rate_limit_per_ip: str = os.environ.get("RATE_LIMIT_PER_IP", "60/minute")
+    _rate_limit_total: str = os.environ.get("RATE_LIMIT_TOTAL", "200/minute")
+
+    _limiter = Limiter(
+        key_func=get_remote_address,
+        default_limits=[_rate_limit_per_ip],
+        application_limits=[_rate_limit_total],
+        headers_enabled=True,
+    )
+
+    # Attach to both the parent app (for test access) and the sub-app
+    # (required by SlowAPIASGIMiddleware which reads ``app.state.limiter``
+    # from the app it is registered on).
+    app.state.limiter = _limiter
+    _role_sync_sub.state.limiter = _limiter
+    _role_sync_sub.add_exception_handler(
+        RateLimitExceeded,
+        _rate_limit_exceeded_handler,  # type: ignore[arg-type]
+    )
+    _role_sync_sub.add_middleware(SlowAPIASGIMiddleware)
 
     _require_bearer = make_bearer_dependency(api_key=api_key)
 
