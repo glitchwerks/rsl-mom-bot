@@ -24,3 +24,12 @@ param containerImage = readEnvironmentVariable('CONTAINER_IMAGE', 'mcr.microsoft
 // Default 'prod' preserves current single-env behavior.
 param momBotEnv = 'prod'
 
+// Non-credential KV values — provisioned via Bicep (issues #121, #236).
+// Credentials (discord-token, database-url, app-insights-conn-string) remain
+// operator-set per infra/aad-runbook.md Step 8.
+param reminderChannelName     = 'moms-reminders'
+param reminderMentionRoleName = 'Member'
+// Operator-confirmed prod Discord guild snowflake (2026-05-27).
+// Passes @minLength(17)/@maxLength(20) decorators added in 40355b7.
+param guildId = '1112031869337346184'
+
