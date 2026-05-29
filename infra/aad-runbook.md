@@ -510,11 +510,22 @@ JOIN pg_roles r     ON r.oid = p.proowner
 WHERE r.rolname = 'mom-bot-gha'
 ORDER BY 1, 2;
 
+-- Types owned by mom-bot-gha
+SELECT n.nspname AS schema, t.typname AS type
+FROM pg_type t
+JOIN pg_namespace n ON n.oid = t.typnamespace
+JOIN pg_roles r     ON r.oid = t.typowner
+WHERE r.rolname = 'mom-bot-gha'
+ORDER BY 1, 2;
+
 -- Single-number guard: total owned-object count
 SELECT
   (SELECT count(*) FROM pg_class c JOIN pg_roles r ON r.oid=c.relowner WHERE r.rolname='mom-bot-gha')
   +
   (SELECT count(*) FROM pg_proc  p JOIN pg_roles r ON r.oid=p.proowner WHERE r.rolname='mom-bot-gha')
+  +
+  (SELECT count(*) FROM pg_type  t JOIN pg_roles r ON r.oid=t.typowner WHERE r.rolname='mom-bot-gha' AND t.typtype != 'c')
+  -- typtype != 'c' excludes composite types already counted in pg_class above
   AS gha_owned_count;
 ```
 
@@ -546,9 +557,13 @@ SELECT
   (SELECT count(*) FROM pg_class c JOIN pg_roles r ON r.oid=c.relowner WHERE r.rolname='mom-bot-gha')
   +
   (SELECT count(*) FROM pg_proc  p JOIN pg_roles r ON r.oid=p.proowner WHERE r.rolname='mom-bot-gha')
+  +
+  (SELECT count(*) FROM pg_type  t JOIN pg_roles r ON r.oid=t.typowner WHERE r.rolname='mom-bot-gha' AND t.typtype != 'c')
+  -- typtype != 'c' excludes composite types already counted in pg_class above
   AS gha_owned_count_after;   -- MUST be 0
 
 -- Spot-check: alembic version table + a real table now owned by mi-mom-bot
+-- adjust table names to match what step 1 enumerated for this database
 SELECT n.nspname, c.relname, pg_get_userbyid(c.relowner) AS owner
 FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
 WHERE c.relname IN ('alembic_version','reminders')
@@ -562,9 +577,10 @@ repeat step 2 there. Exit psql (`\q`).
 **Step 4 — Confirm the object-id, then retry the Entra-admin revoke:**
 
 ```bash
-# Resolve mom-bot-gha's SP object-id from Entra and confirm it matches GHA_OID
-az ad sp list --display-name mom-bot-gha --query "[0].id" -o tsv
-# ^ must equal 6fcf4d62-e6da-4819-9667-234a55018fa2 ; if not, STOP and reconcile.
+# Resolve mom-bot-gha's object-id dynamically from Entra
+GHA_OID=$(az ad sp list --display-name mom-bot-gha --query "[0].id" -o tsv)
+echo "Resolved mom-bot-gha object-id: $GHA_OID"
+# Operator: confirm this equals 6fcf4d62-e6da-4819-9667-234a55018fa2 before proceeding
 
 # List current admins (before)
 az postgres flexible-server microsoft-entra-admin list \

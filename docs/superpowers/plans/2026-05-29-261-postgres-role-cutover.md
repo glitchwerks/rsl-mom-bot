@@ -86,7 +86,7 @@ This GRANT is itself permitted because `current_user` is in `azure_pg_admin` and
 
 > **Pre-flight identity note.** Connect as `cmb_dev` (the human Entra admin). The guest-UPN username must be URL-encoded in the DSN — `cmb_dev` resolves to something like `cmb_dev_outlook.com#EXT#@cmbdevoutlook333.onmicrosoft.com` ([docs/spike/2026-05-17-postgres-aad-findings.md:L144](../../spike/2026-05-17-postgres-aad-findings.md)). For interactive `psql` (below) you pass the username as a plain `user=` field (no URL parse), so encoding is not needed there; it is only needed if you build a SQLAlchemy/libpq *URL*. Use `postgresql+psycopg://` scheme if you script this via SQLAlchemy (bonus finding 1, same spike doc).
 >
-> **Token resource URI:** `https://ossrdbms-aad.database.windows.net` (spike #101). Token TTL is ~86 min — do the whole sequence inside one token window.
+> **Token resource URI:** `https://ossrdbms-aad.database.windows.net` (spike #101). Token TTL is ~86 min (empirically observed, not documented) — do the whole sequence inside one token window.
 
 Set shell variables (bash):
 
@@ -162,6 +162,9 @@ SELECT
   (SELECT count(*) FROM pg_class c JOIN pg_roles r ON r.oid=c.relowner WHERE r.rolname='mom-bot-gha')
   +
   (SELECT count(*) FROM pg_proc  p JOIN pg_roles r ON r.oid=p.proowner WHERE r.rolname='mom-bot-gha')
+  +
+  (SELECT count(*) FROM pg_type  t JOIN pg_roles r ON r.oid=t.typowner WHERE r.rolname='mom-bot-gha' AND t.typtype != 'c')
+  -- typtype != 'c' excludes composite types already counted in pg_class above
   AS gha_owned_count;
 ```
 
@@ -192,6 +195,9 @@ SELECT
   (SELECT count(*) FROM pg_class c JOIN pg_roles r ON r.oid=c.relowner WHERE r.rolname='mom-bot-gha')
   +
   (SELECT count(*) FROM pg_proc  p JOIN pg_roles r ON r.oid=p.proowner WHERE r.rolname='mom-bot-gha')
+  +
+  (SELECT count(*) FROM pg_type  t JOIN pg_roles r ON r.oid=t.typowner WHERE r.rolname='mom-bot-gha' AND t.typtype != 'c')
+  -- typtype != 'c' excludes composite types already counted in pg_class above
   AS gha_owned_count_after;   -- MUST be 0
 
 -- Confirm the objects are now mi-mom-bot's (spot-check the alembic version table + a real table)
@@ -208,9 +214,10 @@ ORDER BY 1,2;
 First confirm the object-id actually belongs to `mom-bot-gha` (guard against revoking the wrong principal):
 
 ```bash
-# Resolve mom-bot-gha's SP object-id from Entra and confirm it matches GHA_OID
-az ad sp list --display-name mom-bot-gha --query "[0].id" -o tsv
-# ^ must equal 6fcf4d62-e6da-4819-9667-234a55018fa2 ; if not, STOP and reconcile.
+# Resolve mom-bot-gha's object-id dynamically from Entra
+GHA_OID=$(az ad sp list --display-name mom-bot-gha --query "[0].id" -o tsv)
+echo "Resolved mom-bot-gha object-id: $GHA_OID"
+# Operator: confirm this equals 6fcf4d62-e6da-4819-9667-234a55018fa2 before proceeding
 
 # List current admins (before)
 az postgres flexible-server microsoft-entra-admin list \
@@ -249,7 +256,7 @@ az postgres flexible-server firewall-rule delete \
 
 ### 4f — Document in the runbook
 
-Add the reassignment + revocation sequence to `infra/aad-runbook.md` Step 5.5 (this is an acceptance criterion of #261). The runbook already carries the optional `mom-bot-gha` revoke snippet at [infra/aad-runbook.md:L428-L436](../../../infra/aad-runbook.md); extend it with the §4a–4c reassignment prerequisite so the revoke is not attempted before reassignment again.
+Add the reassignment + revocation sequence to `infra/aad-runbook.md` Step 5.5 (this is an acceptance criterion of #261). The runbook already carries the optional `mom-bot-gha` revoke snippet under `infra/aad-runbook.md § "Cutover completion: reassign ownership before revoking mom-bot-gha"`; extend it with the §4a–4c reassignment prerequisite so the revoke is not attempted before reassignment again.
 
 ---
 
@@ -293,6 +300,7 @@ The runtime Container App `ca-mom-bot` connects as `mi-mom-bot` (same UAMI as th
 | Vanilla PG: REASSIGN OWNED requires membership in both source and target | [PostgreSQL 16 REASSIGN OWNED](https://www.postgresql.org/docs/current/sql-reassign-owned.html) | 2026-05-29 |
 | REASSIGN OWNED is per-DB context; reassigns ownership only, not grants/default privileges | [Transfer Postgres object ownership](https://learn.microsoft.com/azure/databricks/oltp/projects/transfer-object-ownership#transfer-ownership-of-multiple-objects) | 2026-05-29 |
 | public schema owned by azure_pg_admin on all PG versions (Flexible Server) | [Access management § Public schema ownership changes](https://learn.microsoft.com/azure/postgresql/security/security-access-control#role-management) | 2026-05-29 |
-| Token resource URI, ~86-min TTL, guest-UPN URL-encoding, `postgresql+psycopg://` scheme | [docs/spike/2026-05-17-postgres-aad-findings.md](../../spike/2026-05-17-postgres-aad-findings.md) | repo |
+| Token resource URI, guest-UPN URL-encoding, `postgresql+psycopg://` scheme | [docs/spike/2026-05-17-postgres-aad-findings.md](../../spike/2026-05-17-postgres-aad-findings.md) | repo |
+| ~86-min token TTL | empirically observed, not documented | — |
 | migrate.sh connects as `mi-mom-bot` | [migrate.sh:L40](../../../migrate.sh) | repo |
 | `operatorIpAddress` removed from Bicep; ad-hoc firewall is the documented path | [infra/aad-runbook.md](../../../infra/aad-runbook.md) "Dev-laptop ad-hoc Postgres access" | repo |
