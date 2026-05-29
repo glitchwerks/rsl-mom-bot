@@ -6,11 +6,16 @@ RUN groupadd --system mombot && useradd --system --gid mombot mombot
 WORKDIR /app
 
 # Copy only the files needed for installation first (layer-cache friendly).
-# Alembic migrations are NOT copied here — CI owns migration-apply after
-# Phase 3 (#91).  The runtime image has no alembic.ini or migrations/.
+# Alembic migrations and alembic.ini are included so the image can serve
+# as the Container Apps Job entrypoint for 'alembic upgrade head' (issue #255).
+# migrate.sh is the ENTRYPOINT override used by the migrations job.
 COPY pyproject.toml ./
 COPY uv.lock ./
 COPY src/ ./src/
+COPY migrations/ ./migrations/
+COPY alembic.ini ./
+COPY migrate.sh ./
+RUN chmod +x ./migrate.sh
 
 # Install the package and its runtime deps from the locked lockfile.
 # --no-dev omits test/lint tooling from the image.
