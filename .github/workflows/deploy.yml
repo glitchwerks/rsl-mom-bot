@@ -9,6 +9,7 @@ name: Deploy (mom-bot)
 #   AZURE_CLIENT_ID        — app registration client ID (mom-bot-gha)
 #   AZURE_TENANT_ID        — 48bca6c3-6d4f-4884-bc1a-648ae2362a32
 #   AZURE_SUBSCRIPTION_ID  — 213aa1f8-32d1-4ffe-8f4d-6e60f1cd9dc0
+#   AZURE_RESOURCE_GROUP   — target resource group; defaults to mom-bot if unset
 #
 
 on:
@@ -27,6 +28,9 @@ jobs:
     permissions:
       id-token: write   # required for OIDC federated login to Azure
       contents: read
+
+    env:
+      AZURE_RESOURCE_GROUP: ${{ vars.AZURE_RESOURCE_GROUP || 'mom-bot' }}
 
     steps:
       - name: Checkout
@@ -92,13 +96,13 @@ jobs:
         # so migrations always run against the schema expected by the new code.
         # This mirrors the az containerapp update call below but targets the job.
         run: |
-          if ! az containerapp job show --name job-mom-bot-migrate --resource-group mom-bot &>/dev/null; then
+          if ! az containerapp job show --name job-mom-bot-migrate --resource-group "$AZURE_RESOURCE_GROUP" &>/dev/null; then
             echo "::error::Migration job 'job-mom-bot-migrate' does not exist. Run infra-deploy.yml first to create infrastructure."
             exit 1
           fi
           az containerapp job update \
             --name job-mom-bot-migrate \
-            --resource-group mom-bot \
+            --resource-group "$AZURE_RESOURCE_GROUP" \
             --image ghcr.io/glitchwerks/mom-bot:${{ steps.resolve_sha.outputs.sha }}
 
       - name: Run migrations via Container Apps Job
@@ -109,7 +113,7 @@ jobs:
         run: |
           az containerapp job start \
             --name job-mom-bot-migrate \
-            --resource-group mom-bot
+            --resource-group "$AZURE_RESOURCE_GROUP"
 
       - name: Fetch migration logs from Log Analytics (OQ-3 poll-with-retry)
         if: always() && steps.migrate_job.outcome != 'skipped'
@@ -124,7 +128,7 @@ jobs:
         #      The table returns empty OR raises BadArgumentError during backfill;
         #      both are treated as "not ready yet".
         run: |
-          RG=mom-bot
+          RG="$AZURE_RESOURCE_GROUP"
           JOB=job-mom-bot-migrate
 
           # Get execution name of the most-recent job run.
@@ -214,5 +218,5 @@ jobs:
         run: |
           az containerapp update \
             --name ca-mom-bot \
-            --resource-group mom-bot \
+            --resource-group "$AZURE_RESOURCE_GROUP" \
             --image ghcr.io/glitchwerks/mom-bot:${{ steps.resolve_sha.outputs.sha }}
