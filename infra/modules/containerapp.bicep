@@ -293,3 +293,6 @@ output fqdn string = ca.properties.configuration.?ingress.?fqdn ?? ''
 
 @description('Outbound IP addresses of the Container App. Used by postgres.bicep to build per-IP firewall rules.')
 output outboundIpAddresses array = ca.properties.?outboundIpAddresses ?? []
+
+@description('Resource ID of the Container Apps Environment. Used by sibling modules (e.g. migrations-job.bicep) that must share the same CAE.')
+output caeId string = cae.id

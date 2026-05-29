@@ -172,3 +172,28 @@ module containerApp 'modules/containerapp.bicep' = {
     appInsightsConnectionString: observability.outputs.appInsightsConnectionString
   }
 }
+
+// ---------------------------------------------------------------------------
+// Migrations job (Container Apps Job — issue #255)
+// Replaces the exec-based alembic step in deploy.yml.  Runs alembic upgrade
+// head under mi-mom-bot UAMI in the same CAE as ca-mom-bot, sharing the CAE
+// outbound IPs already allowlisted in the Postgres firewall (spec §3 Q7).
+// Depends implicitly on containerApp (shares the same CAE resource ID).
+// ---------------------------------------------------------------------------
+
+module migrationsJob 'modules/migrations-job.bicep' = {
+  name: 'deploy-migrations-job'
+  scope: rg
+  params: {
+    location: location
+    // CAE resource ID — sourced from containerApp.outputs.caeId so Bicep
+    // establishes an implicit dependency: the CAE must exist before the job
+    // is deployed.  No explicit dependsOn needed.
+    environmentId: containerApp.outputs.caeId
+    containerImage: containerImage
+    managedIdentityId: identity.outputs.id
+    managedIdentityClientId: identity.outputs.clientId
+    postgresHost: postgres.outputs.fqdn
+    postgresDatabase: postgres.outputs.databaseName
+  }
+}
