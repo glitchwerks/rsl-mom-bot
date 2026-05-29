@@ -11,9 +11,10 @@
 #   PGHOST            — Postgres Flexible Server FQDN
 #   PGDATABASE        — database name (default: mom_bot)
 #
-# The TOKEN_URL endpoint is the Azure Instance Metadata Service (IMDS) for
-# managed identity token acquisition.  Only available inside Azure Container
-# Apps / Container Instances.
+# Token acquisition uses azure-identity (already a runtime dependency) via
+# python -m mom_bot.migrations.acquire_token, which replaces the former
+# curl-based IMDS call.  The python:3.12-slim base image does not ship curl,
+# which caused the job to fail with "curl: not found" (issue #259).
 
 set -eu
 
@@ -23,26 +24,15 @@ set -eu
 
 echo "[migrate] acquiring Entra access token for Postgres..."
 
-# Acquire a token via IMDS.  Retry up to 5 times with exponential back-off
-# to handle cold-start IMDS latency.
-attempt=0
-while [ "$attempt" -lt 5 ]; do
-    TOKEN=$(curl -sf \
-        -H "Metadata: true" \
-        "http://169.254.169.254/metadata/identity/oauth2/token?api-version=2018-02-01&resource=https%3A%2F%2Fossrdbms-aad.database.windows.net&client_id=${AZURE_CLIENT_ID}" \
-        | /app/.venv/bin/python -c "import sys, json; print(json.load(sys.stdin)['access_token'])")
-    if [ -n "$TOKEN" ]; then
-        break
-    fi
-    attempt=$((attempt + 1))
-    echo "[migrate] IMDS token attempt $attempt failed — retrying in ${attempt}s..."
-    sleep "$attempt"
-done
+# Acquire a token via azure-identity ManagedIdentityCredential.
+# azure-identity handles IMDS retries and exponential back-off internally.
+TOKEN=$(/app/.venv/bin/python -m mom_bot.migrations.acquire_token)
 
 if [ -z "$TOKEN" ]; then
-    echo "[migrate] ERROR: failed to acquire Entra token after 5 attempts"
+    echo "[migrate] ERROR: failed to acquire Entra token"
     exit 1
 fi
+
 echo "[migrate] token acquired (length=${#TOKEN})"
 
 # Build the Postgres URL.  The username is the MI display name (mi-mom-bot).
