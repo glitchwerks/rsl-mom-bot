@@ -55,7 +55,7 @@ param keyVaultName string
 @description('URI of the Key Vault (e.g. https://kv-mombot-eastus2.vault.azure.net/). Used for KV-backed secret references.')
 param keyVaultUri string
 
-@description('Maximum replica count. @allowed([1]) makes maxReplicas > 1 a hard Bicep build error.')
+@description('Maximum replica count. Cap retained from the pre-Postgres era (Policy 1, issue #87); @allowed([1]) makes maxReplicas > 1 a hard Bicep build error at compile time.')
 @allowed([1])
 param maxReplicas int = 1
 
@@ -114,7 +114,7 @@ resource ca 'Microsoft.App/containerApps@2024-03-01' = {
       // Container Apps auto-provisions TLS when external=true; transport: 'http' is correct here
       // (the platform does TLS termination at the edge — specifying 'https' is wrong for this field).
       // IP allowlist restricts inbound to siege-web prod + dev CAE static egress IPs (D-2; mom-bot#76).
-      // Policy 1 reinforcement (issue #87): no rolling overlap — old replica drains before new one starts.
+      // Single active revision: old replica drains before the new one starts, avoiding rolling overlap during deploys.
       ingress: {
         external: true
         targetPort: 8001
