@@ -310,9 +310,21 @@ class ReminderScheduler:
             dm_service = MemberNotificationService(self._session_factory)
             due_notifications = dm_service.list_due(today_date, now_time)
             # Each notification needs its own fresh session for the
-            # insert-first idempotency claim.
+            # insert-first idempotency claim.  Wrap each call so a single
+            # member's failure (including transient re-raises) does not abort
+            # the whole loop — the next member's DM still fires this tick.
+            # Transient errors already call unmark() before re-raising inside
+            # _handle_member_notification, so the unmarked row is retried next
+            # tick regardless of whether we catch the re-raise here.
             for notif in due_notifications:
-                await self._handle_member_notification(notif, today_date)
+                try:
+                    await self._handle_member_notification(notif, today_date)
+                except Exception:
+                    _logger.exception(
+                        "scheduler: DM loop: unhandled exception for "
+                        "notification %r — continuing to next notification",
+                        notif.name,
+                    )
 
     async def _handle_reminder(
         self,

@@ -1751,3 +1751,99 @@ async def test_existing_channel_reminders_unaffected_by_dm_branch() -> None:
     channel.send.assert_called_once()
     # DM also fires.
     member.send.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# Regression test — PR #277 finding 1: DM loop isolation
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_dm_loop_continues_after_first_notification_transient_error() -> None:
+    """A transient failure on the first notification does not abort the loop.
+
+    Regression for PR #277 finding 1: the DM loop previously let a
+    re-raised transient exception from ``_handle_member_notification``
+    propagate up through the ``for notif in due_notifications`` loop,
+    aborting the remainder of the tick.  A single member's repeated
+    transient failure could therefore delay or drop every other member's
+    independent DM for the same tick.
+
+    Fix: each ``_handle_member_notification`` call is now wrapped in
+    ``try/except Exception`` so a failure on notification N does not
+    prevent notification N+1 from firing.
+
+    Setup: two due notifications in the same tick.  The FIRST raises a
+    transient 5xx ``HTTPException`` (which also ``unmark()``s its row so
+    it is retried next tick).  The SECOND member's ``send`` must still be
+    called on THIS tick.
+    """
+    engine = _make_engine_with_member_notifications()
+
+    # First member — transient 5xx on send.
+    first_member_id = _MEMBER_DISCORD_ID
+    first_member = FakeMember(first_member_id)
+    first_member.send.side_effect = discord.HTTPException(
+        MagicMock(status=503, reason="Service Unavailable"), "test"
+    )
+
+    # Second member — different snowflake; send succeeds.
+    second_member_id = 777666555444333222
+    second_member = FakeMember(second_member_id)
+
+    guild = FakeGuild()
+    guild.add_member(first_member)
+    guild.add_member(second_member)
+
+    with Session(engine) as s:
+        _seed_member_notification(
+            s,
+            name="notif-first",
+            target_discord_id=first_member_id,
+            anchor_date_utc=_NOTIFICATION_ANCHOR,
+            fire_time_utc=_MEMBER_FIRE_TIME,
+        )
+        _seed_member_notification(
+            s,
+            name="notif-second",
+            target_discord_id=second_member_id,
+            anchor_date_utc=_NOTIFICATION_ANCHOR,
+            fire_time_utc=_MEMBER_FIRE_TIME,
+        )
+
+    bot = FakeBot(ready=True)
+    scheduler = _make_scheduler_with_guild(bot, guild, engine, tick_seconds=0.05)
+
+    with time_machine.travel(_TUESDAY_0700, tick=False):
+        task = asyncio.create_task(scheduler.run())
+        # Poll until the second member's send has fired (proving the loop
+        # continued past the first member's transient error).
+        deadline = asyncio.get_event_loop().time() + 5.0
+        while second_member.send.call_count < 1:
+            if asyncio.get_event_loop().time() >= deadline:
+                raise AssertionError(
+                    "Timed out waiting for second member's DM — the DM loop "
+                    "may have aborted after the first notification's transient "
+                    "error instead of continuing to the next notification."
+                )
+            await asyncio.sleep(0.005)
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+
+    # Primary assertion: the second member's DM fired this same tick.
+    second_member.send.assert_called_once()
+
+    # First member's row was unmarked after the transient 5xx, so it will
+    # be retried next tick.  Only the second notification's sent row remains.
+    from mom_bot.member_notifications.models import MemberNotificationSent
+
+    with Session(engine) as s:
+        count = s.query(MemberNotificationSent).count()
+    assert count == 1, (
+        f"Expected 1 sent row (second notification only); got {count}. "
+        "The first notification's row should have been deleted by unmark() "
+        "after the transient 5xx."
+    )

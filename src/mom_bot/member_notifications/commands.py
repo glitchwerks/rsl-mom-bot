@@ -39,6 +39,7 @@ import re
 
 import discord
 import discord.app_commands as app_commands
+from discord.app_commands import Choice
 
 from mom_bot.member_notifications.service import (
     _VALID_CADENCES,
@@ -73,6 +74,14 @@ _INVALID_CADENCE_MSG = "Invalid cadence — must be one of 'weekly', 'biweekly',
 
 # Regex: exactly HH:MM (no seconds, no extra chars).
 _TIME_RE = re.compile(r"^\d{2}:\d{2}$")
+
+# Cadence choices for the Discord UI dropdown (spec § 2.5).
+# Used by both /member-notify-add and /member-notify-update.
+_CADENCE_CHOICES: list[Choice[str]] = [
+    Choice(name="Weekly", value="weekly"),
+    Choice(name="Biweekly", value="biweekly"),
+    Choice(name="Monthly", value="monthly"),
+]
 
 
 # ---------------------------------------------------------------------------
@@ -470,6 +479,7 @@ def register(
         description="Create a recurring DM notification for a member.",
     )
     @app_commands.default_permissions(manage_guild=True)
+    @app_commands.choices(cadence=_CADENCE_CHOICES)
     async def _add(
         interaction: discord.Interaction,
         member: discord.Member,
@@ -533,6 +543,7 @@ def register(
         description="Partially update a member notification.",
     )
     @app_commands.default_permissions(manage_guild=True)
+    @app_commands.choices(cadence=_CADENCE_CHOICES)
     async def _update(
         interaction: discord.Interaction,
         name: str,

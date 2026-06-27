@@ -247,6 +247,12 @@ SiegeWebClient` instance registered via :func:`make_client`; stored so
             # Run the scheduler loop for the bot's lifetime (plan § 6).
             guild_id = int(load_secret("guild-id"))
             live_guild = self.get_guild(guild_id)
+            if live_guild is None:
+                _logger.critical(
+                    "Guild %d not found after bot READY — " "cannot start scheduler",
+                    guild_id,
+                )
+                raise RuntimeError(f"Guild {guild_id} not found after bot READY")
             scheduler = ReminderScheduler(self, factory, guild=live_guild)
             _logger.info("Reminder scheduler started")
             await scheduler.run()
