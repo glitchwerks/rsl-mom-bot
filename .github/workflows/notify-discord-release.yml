@@ -1,7 +1,14 @@
 # notify-discord-release.yml
 #
-# Posts a Discord embed to the release-announcements channel whenever a
-# GitHub Release is published on this repo.
+# Manual remediation tool — re-posts the Discord release announcement for a
+# given tag.  Use this if the automatic announcement in release.yml failed or
+# needs to be re-sent for any reason.
+#
+# Trigger: workflow_dispatch only (input: tag, required).
+#
+# Auto-posting is now handled directly inside release.yml as a final `notify`
+# job (needs: [verify, release]).  This workflow exists ONLY as a manual
+# recovery path — see RELEASING.md § "What a release does".
 #
 # Required secret:
 #   DISCORD_RELEASE_WEBHOOK_URL  — Discord Incoming Webhook URL.
@@ -10,44 +17,29 @@
 #   https://github.com/glitchwerks/mom-bot/settings/secrets/actions
 #
 # Spec: glitchwerks/rsl-mom-apps#17 (coord) / glitchwerks/mom-bot#226 (impl)
+# Fix:  glitchwerks/mom-bot#274
 
-name: Notify Discord on Release
+name: Notify Discord on Release (Manual Remediation)
 
 on:
-  release:
-    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag to announce (e.g. v1.2.3)'
+        required: true
+        type: string
 
 jobs:
   notify:
     name: Post Discord release announcement
     runs-on: ubuntu-latest
-    # This workflow only needs to read repo contents (for the extract script).
+    # This workflow only needs to read repo contents (for the extract script)
+    # and read releases (for gh release view).
     permissions:
       contents: read
 
     steps:
-      # -----------------------------------------------------------------------
-      # Idempotency guard (coord spec §R7):
-      # GitHub fires the "published" event both on initial publication AND when
-      # a release body is edited and re-published.  We only want to post once —
-      # on the original publication.  If created_at != published_at the event
-      # is a re-publication (body edit) — skip it with an explanatory notice.
-      # -----------------------------------------------------------------------
-      - name: Check idempotency guard
-        id: guard
-        run: |
-          CREATED_AT="${{ github.event.release.created_at }}"
-          PUBLISHED_AT="${{ github.event.release.published_at }}"
-
-          if [ "$CREATED_AT" != "$PUBLISHED_AT" ]; then
-            echo "::notice::Skipping Discord notification — this is a re-publication of an existing release (created_at=$CREATED_AT, published_at=$PUBLISHED_AT). Discord was already notified on initial publication."
-            echo "skip=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "skip=false" >> "$GITHUB_OUTPUT"
-          fi
-
       - name: Validate required secrets
-        if: steps.guard.outputs.skip == 'false'
         run: |
           if [ -z "${{ secrets.DISCORD_RELEASE_WEBHOOK_URL }}" ]; then
             echo "::error::DISCORD_RELEASE_WEBHOOK_URL secret is not set. See RELEASING.md § Discord Highlights convention for setup instructions."
@@ -55,25 +47,27 @@ jobs:
           fi
 
       - name: Checkout repository
-        if: steps.guard.outputs.skip == 'false'
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
 
       # -----------------------------------------------------------------------
-      # Extract the Highlights section from the release body (coord spec §R4).
-      # Falls back to a minimal description when Highlights is absent (§R6).
-      # Applies the 1500-char soft-cap and truncates if needed (§R5).
+      # Resolve the release from the input tag and extract the Highlights
+      # section for the embed description.
       # -----------------------------------------------------------------------
       - name: Extract Highlights section
-        if: steps.guard.outputs.skip == 'false'
         id: highlights
         env:
-          RELEASE_BODY: ${{ github.event.release.body }}
-          TAG_NAME: ${{ github.event.release.tag_name }}
-          HTML_URL: ${{ github.event.release.html_url }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          INPUT_TAG: ${{ github.event.inputs.tag }}
         run: |
+          TAG="$INPUT_TAG"
+          HTML_URL="https://github.com/${{ github.repository }}/releases/tag/${TAG}"
+
+          # Fetch the release body from GitHub.
+          RELEASE_BODY="$(gh release view "$TAG" --json body --jq '.body')"
+
           # Pass the release body through the extraction script.
           # The script reads from stdin and writes the final description to stdout.
-          DESCRIPTION="$(printf '%s' "$RELEASE_BODY" | bash scripts/extract-highlights.sh "$TAG_NAME" "$HTML_URL")"
+          DESCRIPTION="$(printf '%s' "$RELEASE_BODY" | bash scripts/extract-highlights.sh "$TAG" "$HTML_URL")"
 
           # Write to GITHUB_OUTPUT using a heredoc delimiter so that multi-line
           # values and special characters are preserved correctly.
@@ -83,32 +77,39 @@ jobs:
             echo "HIGHLIGHTS_EOF"
           } >> "$GITHUB_OUTPUT"
 
+          echo "html_url=${HTML_URL}" >> "$GITHUB_OUTPUT"
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+
       # -----------------------------------------------------------------------
       # Build embed and POST to Discord webhook (coord spec §R3).
       #
-      # Embed shape:
+      # No idempotency guard — a manually-dispatched remediation run intends
+      # to post.  The operator invoking this workflow accepts that the message
+      # will appear in Discord.
+      #
+      # Embed shape mirrors release.yml notify job for consistency:
       #   title       — "mom-bot <tag>" or "[pre-release] mom-bot <tag>" (§R8)
       #   url         — GitHub Release URL
       #   description — Highlights text (or fallback)
-      #   color       — 0x57F287 (Discord green) to distinguish mom-bot releases
-      #                 from siege-web releases (which will use a different color)
+      #   color       — 0x57F287 (Discord green)
       #   footer.text — "Published by <author>" (omitted if author absent)
-      #   timestamp   — release.published_at (ISO 8601)
-      #
-      # Uses raw curl + jq (both pre-installed on ubuntu-latest).
-      # No third-party Actions are used for the POST step — keeping it auditable.
+      #   timestamp   — release.publishedAt (ISO 8601)
       # -----------------------------------------------------------------------
       - name: Post Discord embed
-        if: steps.guard.outputs.skip == 'false'
         env:
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_RELEASE_WEBHOOK_URL }}
-          TAG_NAME: ${{ github.event.release.tag_name }}
-          HTML_URL: ${{ github.event.release.html_url }}
-          IS_PRERELEASE: ${{ github.event.release.prerelease }}
-          AUTHOR_LOGIN: ${{ github.event.release.author.login }}
-          PUBLISHED_AT: ${{ github.event.release.published_at }}
+          TAG_NAME: ${{ steps.highlights.outputs.tag }}
+          HTML_URL: ${{ steps.highlights.outputs.html_url }}
           DESCRIPTION: ${{ steps.highlights.outputs.description }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          TAG="$TAG_NAME"
+
+          # Fetch release metadata: author, published timestamp, pre-release flag.
+          AUTHOR_LOGIN="$(gh release view "$TAG" --json author --jq '.author.login')"
+          PUBLISHED_AT="$(gh release view "$TAG" --json publishedAt --jq '.publishedAt')"
+          IS_PRERELEASE="$(gh release view "$TAG" --json isPrerelease --jq '.isPrerelease')"
+
           # Build the embed title, prefixing [pre-release] when applicable (§R8).
           if [ "$IS_PRERELEASE" = "true" ]; then
             EMBED_TITLE="[pre-release] mom-bot $TAG_NAME"
@@ -127,9 +128,6 @@ jobs:
           # string values are safely escaped (no manual JSON quoting).
           #
           # color: 0x57F287 = 5,763,719 decimal
-          #   Discord green — chosen to visually distinguish mom-bot announcements
-          #   from siege-web announcements (which will use a different palette).
-          #   Reference: https://discord.com/developers/docs/reference#color
           PAYLOAD="$(jq -n \
             --arg title       "$EMBED_TITLE" \
             --arg url         "$HTML_URL" \

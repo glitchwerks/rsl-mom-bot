@@ -8,7 +8,9 @@ Authoritative release process for the repo's `v*` tags. This document exists bec
 
 Pushing a `v*` tag triggers `.github/workflows/release.yml` (added in #215), which publishes two artifacts: a GitHub Release page and an immutable GHCR image tagged `:vX.Y.Z` at `ghcr.io/glitchwerks/mom-bot`. The mutable `:main` tag continues to track HEAD as before — the versioned tag is an additional pointer to the same SHA, not a replacement. Deploying the new image to the Azure Container App is a separate step, performed manually via `workflow_dispatch` on `.github/workflows/deploy.yml`. The tag-push does not trigger a deploy. You decide when prod gets the new image.
 
-Publishing the GitHub Release (clicking "Publish release" in the GitHub UI or using `gh release create`) also triggers `.github/workflows/notify-discord-release.yml`, which posts an announcement embed to the Discord channel configured via the `DISCORD_RELEASE_WEBHOOK_URL` repo secret. The notification fires on initial publication only — editing the release body afterward does not re-post.
+`release.yml` also posts the Discord announcement directly as a final `notify` job (after the GitHub Release is created). It does **not** rely on a separate `release: published`-triggered workflow — GitHub does not fire cross-workflow events from `GITHUB_TOKEN`-raised release events, so a separate trigger would never fire (#274). The notification is configured via the `DISCORD_RELEASE_WEBHOOK_URL` repo secret; if the secret is absent the notify job logs a warning and exits cleanly so the overall release is not blocked.
+
+`.github/workflows/notify-discord-release.yml` is a **manual remediation tool** (`workflow_dispatch` only, input: `tag`). Use it to re-post the Discord announcement for a given tag if the automatic post in `release.yml` failed or needs to be resent. It has no idempotency guard — a manual dispatch is an intentional re-post.
 
 ### Discord Highlights convention
 
