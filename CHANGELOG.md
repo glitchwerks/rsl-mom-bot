@@ -10,19 +10,65 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 <!-- Add a "### 📣 Highlights" sub-section here before cutting the next release.
      See RELEASING.md § "Discord Highlights convention" for what to write there. -->
 
+## [1.1.0] - 2026-06-27
+
+### 📣 Highlights
+
+v1.1.0 makes mom-bot observable and hardens its infrastructure for the long run:
+
+- **Production observability** — OpenTelemetry traces and logs now flow to Azure Application Insights, giving operators structured visibility into sidecar and bot activity for the first time.
+- **Managed-identity migrations** — Postgres schema migrations now run as a dedicated UAMI Container Apps Job with Entra token auth, replacing the manual migration step and eliminating the need for password-based credentials.
+- **Bicep-provisioned secrets and infrastructure** — Log Analytics, App Insights, non-credential Key Vault values, and environment parameterisation are now declared in Bicep and applied through the standard deploy pipeline; no more ad-hoc manual provisioning.
+- **Ingress rate-limiting** — `/api/internal/*` endpoints are now rate-limited before bearer auth, protecting the sidecar from unauthenticated flood traffic.
+- **Dead stopgap removed** — the SQLite-on-AzureFile interim plumbing (storage account, file share, volume mount) has been fully deleted; Postgres is the unambiguous production database.
+- **Documentation correctness sweep** — runbooks, the README, the secrets inventory, and ADR/spec files updated to reflect the current production state.
+
+### Added
+
+- **OpenTelemetry / Azure Monitor observability** — OTel SDK wired with Azure Monitor exporter; traces and logs from both the bot and sidecar now flow to Application Insights (#199, #267).
+- **Rate-limiting on `/api/internal/*`** — sidecar enforces a per-IP request rate limit on internal endpoints before bearer auth is checked, protecting against unauthenticated flood traffic (#209, #232).
+- **UAMI Container Apps Job for Postgres migrations** — `alembic upgrade head` now runs as a separate Container Apps Job using a User-Assigned Managed Identity and Entra token auth, replacing the manual migration step in the deploy pipeline (#256).
+
 ### Changed
 
-- README: audit for staleness — Status, Roadmap, Database/Migrations, Project Structure, References sections refreshed to reflect v1.0 ship + v1.1 in progress (refs #249).
-- Runbook + secrets-inventory: resolve stale TBDs and "Epic 1+" placeholders (closes #249).
+- README: audit for staleness — Status, Roadmap, Database/Migrations, Project Structure, References sections refreshed to reflect v1.0 ship + v1.1 in progress (#249, #250).
+- Runbook + secrets-inventory: resolve stale TBDs and "Epic 1+" placeholders (#249, #251).
 
 ### Fixed
 
-- **OIDC federated credentials** updated to repo's canonical name `rsl-mom-bot` (was `mom-bot` pre-rename). Both `mom-bot-pr` and `mom-bot-main-push` FICs now match GitHub's current OIDC subject claim; unblocks the `Bicep what-if preview` workflow on PR-triggered runs and the next `workflow_dispatch` of `deploy.yml` (#248).
+- **Postgres Entra token acquisition** — token for Postgres auth is now obtained via `azure-identity` (`ManagedIdentityCredential`), replacing a fragile `curl`-based approach that failed in the Container App environment (#260).
+- **ACA IP-deny vs app-auth response codes** — day-role-sync runbook corrected to document the actual HTTP responses returned by ACA ingress IP-deny rules vs. application-level auth failures (#196, #270).
+- **OIDC federated credentials** updated to repo's canonical name `rsl-mom-bot` (was `mom-bot` pre-rename). Both `mom-bot-pr` and `mom-bot-main-push` FICs now match GitHub's current OIDC subject claim; unblocks the `Bicep what-if preview` workflow on PR-triggered runs and the next `workflow_dispatch` of `deploy.yml` (#248, #252).
 
-### Removed
+### Infrastructure
 
-- Removed five completed plan files per lifecycle policy (#246).
-- **Dead AzureFile plumbing removed** — `storage.bicep` (storage account + file share), the CAE `storageBinding` resource, and the `/data` volume mount deleted from Bicep. The SQLite-on-AzureFile stopgap (#92) has been superseded by Postgres since v1.0; post-deploy operator step required to confirm share removal (see #240). (#240)
+- **Log Analytics + App Insights provisioned via Bicep** — workspace and Application Insights instance declared in Bicep and wired to the Container App Environment (#239).
+- **Non-credential Key Vault values provisioned via Bicep** — configuration secrets (non-credential KV entries) are now set through the Bicep deployment rather than applied manually (#121, #237).
+- **`MOM_BOT_ENV` / database-url parameterisation** — environment name and derived database URL secret name now flow through Bicep parameters, removing hard-coded values (#230).
+- **Resource group parameterised in CI** — `AZURE_RESOURCE_GROUP` environment variable drives the deploy workflow; no more hard-coded RG name (#263).
+- **Dead AzureFile plumbing removed** — `storage.bicep` (storage account + file share), the CAE `storageBinding` resource, and the `/data` volume mount deleted. The SQLite-on-AzureFile stopgap (#92) has been fully superseded by Postgres (#240, #265).
+
+### Documentation
+
+- UAMI Container Apps Job migration spec committed to `docs/specs/` (#241, #254).
+- Postgres role-ownership cutover plan and runbook Step 5.5 added (#262).
+- AAD runbook TBDs resolved; App Insights rows added to secrets inventory (#249, #251).
+- FIC rename (`mom-bot` → `rsl-mom-bot`) documented (#248, #252).
+- Runbook flip-sequence Step 0 pre-deployment sanity check inserted (#244).
+- Preflight checklist corrected for stale role-name and KV-secret claims (#242).
+- Stale SQLite-as-production framing removed from framework plan (#243, #245).
+- Five completed plan files deleted per lifecycle policy (#246, #247).
+
+### CI
+
+- Discord release announcement posted automatically on GitHub Release publication via `notify-discord-release.yml` (#228).
+- `uv lock --check` added to CI to fail fast on `pyproject.toml` ↔ `uv.lock` divergence (#229).
+
+### Tests
+
+- Behavioral coverage added for `acquire_token __main__` and `migrate.sh` (#264).
+- `_EXPECTED_TABLES` completed and realistic snowflake regression added to Alembic test suite (#238).
+- Flaky concurrent-serialization test in sidecar stabilised (#223, #227).
 
 ## [1.0.0] - 2026-05-26
 
