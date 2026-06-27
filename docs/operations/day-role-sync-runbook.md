@@ -77,17 +77,58 @@ skip steps — the sequence exists to catch configuration errors before live tra
    should already be the case).
 
 2. **Confirm mom-bot B2 is deployed.** Check that the mom-bot Container App is running the
-   revision that includes the `POST /api/internal/role-sync` endpoint. Verify with a health-check
-   request (no auth needed — the endpoint returns `401` on missing auth, which proves the route
-   exists):
+   revision that includes the `POST /api/internal/role-sync` endpoint. Verify with a probe
+   request (no `Authorization` header — the response body and status together prove whether
+   the route and the IP allowlist are behaving as expected):
    ```bash
-   curl -s -o /dev/null -w "%{http_code}" \
+   curl -s -i \
      https://<mom-bot-hostname>/api/internal/role-sync \
      -X POST \
      -H "Content-Type: application/json" \
      -d '{}'
    ```
-   Expected response: `401`. A `404` means the endpoint is not deployed yet.
+
+   The `-i` flag surfaces both the HTTP status line and the response body. The body — not
+   just the status code — is what the disambiguation table below keys on; `403` alone is
+   ambiguous between a platform deny and an app-layer rejection.
+
+   **Expected response depends on your caller IP** (see also the disambiguation table below):
+
+   - **Allowlisted caller** (e.g. from a siege-web-api-dev exec shell, or an Azure Cloud Shell
+     session whose egress IP is in `infra/modules/containerapp.bicep:123-136`): expect
+     `403` with body `{"detail":"Not authenticated"}`. This confirms the app was reached and
+     rejected the request because no bearer token was supplied. (`401` only fires when the
+     `Authorization` header is present but wrong — see `src/mom_bot/sidecar/auth.py:109-120`.)
+   - **Non-allowlisted caller** (e.g. a laptop): expect `403` with body
+     `"RBAC: access denied"` from the platform edge — the request never reaches the app.
+     Route-reachability cannot be confirmed from a denied IP; run this step from an
+     allowlisted context instead.
+
+   A `404` from an allowlisted caller means the endpoint is not deployed in the active
+   revision — stop and fix the deployment before proceeding.
+
+   **Status-code disambiguation** — all three rejection modes can return 4xx; use the
+   response body to tell them apart:
+
+   | Status | Body | Meaning |
+   |--------|------|---------|
+   | `403` | `"RBAC: access denied"` (plain string) | Platform IP-allowlist deny; app not reached |
+   | `403` | `{"detail":"Not authenticated"}` (JSON) | App reached; `Authorization` header absent |
+   | `401` | `{"detail":"Invalid API key"}` + `WWW-Authenticate: Bearer` header | App reached; token present but wrong |
+
+   (Sources: `src/mom_bot/sidecar/auth.py:109-120`; `infra/modules/containerapp.bicep:123-136`.)
+
+   **Revision-transition failure case (issue #196):** if a non-allowlisted caller observes
+   `403 {"detail":"Not authenticated"}` — the app-layer body rather than the platform-edge
+   body — during or immediately after a revision activation or rollback, the ACA IP allowlist
+   is transiently unenforced on the activating revision. This behavior was observed empirically
+   during the #196 rollout; Microsoft's ACA documentation does not address `ipSecurityRestrictions`
+   enforcement during the revision-activation window, so this is not a documented platform
+   guarantee. During that window, a non-allowlisted IP can reach the app layer — a brief
+   defense-in-depth gap — but the bearer token remains the primary trust boundary and will
+   still reject any unauthenticated request. The allowlist configuration itself is correct;
+   steady-state enforcement is confirmed. Wait approximately 60 seconds for the revision to
+   reach steady state and retry; the platform-edge `403` should be restored.
 
 3. **Curl-smoke the sidecar endpoint directly.** Send a valid payload with the correct bearer
    token. This tests the mom-bot receiver in isolation, without siege-web involved.
