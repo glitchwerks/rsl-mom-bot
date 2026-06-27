@@ -165,11 +165,20 @@ CHIMERA_TEMPLATE: str = (
     "Make sure to participate and help the clan!"
 )
 
-# Tank Week templates — placeholder text until officers supply wording.
-# Officers update these constants via a PR; a small data migration or
-# manual UPDATE then refreshes already-seeded rows.
-HYDRA_TANK_WEEK_HEADSUP_TEMPLATE: str = "<TODO: officer to supply>"
-HYDRA_TANK_WEEK_END_TEMPLATE: str = "<TODO: officer to supply>"
+# Tank Week message templates (officer-approved copy).
+# To revise wording: edit these constants and open a PR; a small data
+# migration or manual UPDATE will refresh already-seeded rows.
+HYDRA_TANK_WEEK_HEADSUP_TEMPLATE: str = (
+    ":shield: **Tank Week Incoming!** :shield:\n"
+    "Tank Week starts tomorrow — hit the bare minimum for the max chest, no more!\n"
+    "Clear the top reward tier, then hold. Don't overhit the boss."
+)
+
+HYDRA_TANK_WEEK_END_TEMPLATE: str = (
+    ":shield: **Hydra Tank Week — Final Hours!** :shield:\n"
+    "Less than 24 hours left — make sure you've locked in the max chest, then stop!\n"
+    "Bare minimum for the reward, nothing extra. Don't overhit."
+)
 
 
 # ---------------------------------------------------------------------------

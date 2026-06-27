@@ -32,11 +32,20 @@ down_revision: str | Sequence[str] | None = "0004_tank_week_columns"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
-# Message templates — placeholder text until officers supply wording.
-# Matches the HYDRA_TANK_WEEK_HEADSUP_TEMPLATE and
-# HYDRA_TANK_WEEK_END_TEMPLATE constants in seed.py.
-_HEADSUP_TEMPLATE: str = "<TODO: officer to supply>"
-_TANK_END_TEMPLATE: str = "<TODO: officer to supply>"
+# Message templates — must match HYDRA_TANK_WEEK_HEADSUP_TEMPLATE and
+# HYDRA_TANK_WEEK_END_TEMPLATE in seed.py exactly so already-seeded
+# environments receive the same text as a first-boot seed.
+_HEADSUP_TEMPLATE: str = (
+    ":shield: **Tank Week Incoming!** :shield:\n"
+    "Tank Week starts tomorrow — hit the bare minimum for the max chest, no more!\n"
+    "Clear the top reward tier, then hold. Don't overhit the boss."
+)
+
+_TANK_END_TEMPLATE: str = (
+    ":shield: **Hydra Tank Week — Final Hours!** :shield:\n"
+    "Less than 24 hours left — make sure you've locked in the max chest, then stop!\n"
+    "Bare minimum for the reward, nothing extra. Don't overhit."
+)
 
 
 def upgrade() -> None:
