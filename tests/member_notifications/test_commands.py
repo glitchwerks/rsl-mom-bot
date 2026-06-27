@@ -20,14 +20,14 @@ from unittest.mock import AsyncMock, MagicMock
 
 import discord
 import pytest
-from mom_bot.member_notifications.commands import register
-from mom_bot.member_notifications.service import (
-    MemberNotificationService,
-)
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 from mom_bot.db import Base
+from mom_bot.member_notifications.commands import register
+from mom_bot.member_notifications.service import (
+    MemberNotificationService,
+)
 
 # ---------------------------------------------------------------------------
 # Constants
