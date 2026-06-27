@@ -864,3 +864,105 @@ async def test_update_malformed_time_sends_validation_ephemeral() -> None:
     kwargs = interaction.followup.send.call_args[1]
     assert kwargs.get("ephemeral") is True
     mock_service.update.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# Regression tests — PR #277 finding 4: cadence validation in add and update
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_add_invalid_cadence_sends_validation_ephemeral() -> None:
+    """/member-notify-add with an invalid cadence sends ephemeral validation msg.
+
+    Regression for PR #277 finding 4: the add handler accepted cadence
+    without pre-validation, so an invalid value hit the broad except clause
+    and returned a generic ops-error instead of a clear validation message.
+    Service.create must NOT be called.
+    """
+    engine = _make_engine()
+    service = _make_service(engine)
+    mock_service = MagicMock(wraps=service)
+    interaction = _make_interaction()
+    member = _make_member()
+
+    add, *_ = _import_handlers()
+    await add(
+        interaction,
+        service=mock_service,
+        member=member,
+        name=_DEFAULT_NAME,
+        start_date=_DEFAULT_START_DATE,
+        time=_DEFAULT_TIME,
+        cadence="quarterly",  # invalid — not weekly/biweekly/monthly
+        message=_DEFAULT_MESSAGE,
+    )
+
+    interaction.followup.send.assert_awaited_once()
+    kwargs = interaction.followup.send.call_args[1]
+    assert kwargs.get("ephemeral") is True
+    # Must surface a validation message, not a generic ops-error.
+    content = kwargs.get("content", "") or (
+        interaction.followup.send.call_args[0][0] if interaction.followup.send.call_args[0] else ""
+    )
+    assert "cadence" in content.lower() or "weekly" in content.lower()
+    mock_service.create.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_update_invalid_cadence_sends_validation_ephemeral() -> None:
+    """/member-notify-update with an invalid cadence sends ephemeral validation msg.
+
+    Regression for PR #277 finding 4: the update handler accepted cadence
+    without pre-validation.  An invalid value must yield an ephemeral
+    validation message and must NOT call the service.
+    """
+    engine = _make_engine()
+    service = _make_service(engine)
+    mock_service = MagicMock(wraps=service)
+    interaction = _make_interaction()
+
+    _, _, _, update_cmd, _ = _import_handlers()
+    await update_cmd(
+        interaction,
+        service=mock_service,
+        name=_DEFAULT_NAME,
+        cadence="annually",  # invalid — not weekly/biweekly/monthly
+    )
+
+    interaction.followup.send.assert_awaited_once()
+    kwargs = interaction.followup.send.call_args[1]
+    assert kwargs.get("ephemeral") is True
+    content = kwargs.get("content", "") or (
+        interaction.followup.send.call_args[0][0] if interaction.followup.send.call_args[0] else ""
+    )
+    assert "cadence" in content.lower() or "weekly" in content.lower()
+    mock_service.update.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_add_valid_cadence_weekly_succeeds() -> None:
+    """/member-notify-add with cadence='weekly' proceeds to service.create.
+
+    Finding 4 positive case: ensure valid cadences are not blocked.
+    """
+    engine = _make_engine()
+    service = _make_service(engine)
+    interaction = _make_interaction()
+    member = _make_member()
+
+    add, *_ = _import_handlers()
+    await add(
+        interaction,
+        service=service,
+        member=member,
+        name=_DEFAULT_NAME,
+        start_date=_DEFAULT_START_DATE,
+        time=_DEFAULT_TIME,
+        cadence="weekly",
+        message=_DEFAULT_MESSAGE,
+    )
+
+    row = service.get(_DEFAULT_NAME)
+    assert row is not None
+    assert row.cadence == "weekly"

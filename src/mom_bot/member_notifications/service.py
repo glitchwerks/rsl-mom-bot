@@ -41,6 +41,7 @@ from mom_bot.member_notifications.schedule import is_occurrence_date
 
 __all__ = [
     "DuplicateNotificationError",
+    "InvalidDiscordIdError",
     "MemberNotificationService",
     "NotificationNotFoundError",
 ]
@@ -48,6 +49,23 @@ __all__ = [
 _logger = logging.getLogger(__name__)
 
 _VALID_CADENCES = frozenset({"weekly", "biweekly", "monthly"})
+
+# Fields that callers may update via update().  Immutable fields (id,
+# name, created_at) and unknown keys are rejected to prevent silent
+# mutation of the lookup key or audit columns.
+_MUTABLE_FIELDS = frozenset(
+    {
+        "target_discord_id",
+        "anchor_date_utc",
+        "fire_time_utc",
+        "cadence",
+        "message_template",
+        "enabled",
+    }
+)
+
+# SQLite / SQLAlchemy embeds the table+column in the UNIQUE error message.
+_NAME_UNIQUE_MARKER = "member_notification.name"
 
 
 # ---------------------------------------------------------------------------
@@ -87,6 +105,58 @@ class NotificationNotFoundError(Exception):
         """
         super().__init__(f"No notification named {name!r} found.")
         self.name = name
+
+
+class InvalidDiscordIdError(ValueError):
+    """Raised when ``target_discord_id`` is not a valid all-digits string.
+
+    A valid Discord snowflake is a non-empty string of ASCII digits with
+    no leading zeros (spec § 2.4).  The round-trip invariant
+    ``str(int(s)) == s`` is used to catch both non-digit characters and
+    leading-zero forms.
+
+    Args:
+        value: The invalid value that was provided.
+    """
+
+    def __init__(self, value: str) -> None:
+        """Initialise with the invalid value.
+
+        Args:
+            value: The invalid ``target_discord_id`` string.
+        """
+        super().__init__(
+            f"target_discord_id must be a non-empty all-digits string "
+            f"(no leading zeros); got {value!r}."
+        )
+        self.value = value
+
+
+# ---------------------------------------------------------------------------
+# Internal helpers
+# ---------------------------------------------------------------------------
+
+
+def _validate_discord_id(value: str) -> None:
+    """Raise :class:`InvalidDiscordIdError` if *value* is not a valid snowflake.
+
+    A valid Discord snowflake is a non-empty string of ASCII digits with no
+    leading zeros.  The round-trip invariant ``str(int(s)) == s`` is a cheap
+    check that catches both non-digit characters and leading-zero forms
+    (spec § 2.4).
+
+    Args:
+        value: The ``target_discord_id`` string to validate.
+
+    Raises:
+        InvalidDiscordIdError: If *value* is empty, contains non-digit
+            characters, or has a leading zero.
+    """
+    try:
+        if not value or str(int(value)) != value:
+            raise InvalidDiscordIdError(value)
+    except (ValueError, OverflowError) as exc:
+        raise InvalidDiscordIdError(value) from exc
 
 
 # ---------------------------------------------------------------------------
@@ -151,6 +221,8 @@ class MemberNotificationService:
 
         Raises:
             ValueError: If *cadence* is not one of the three valid values.
+            InvalidDiscordIdError: If *target_discord_id* is not a
+                non-empty all-digits string (spec § 2.4).
             DuplicateNotificationError: If a notification named *name*
                 already exists.
         """
@@ -158,6 +230,7 @@ class MemberNotificationService:
             raise ValueError(
                 f"Invalid cadence {cadence!r}; must be one of " f"{sorted(_VALID_CADENCES)}."
             )
+        _validate_discord_id(target_discord_id)
 
         row = MemberNotification(
             name=name,
@@ -175,7 +248,13 @@ class MemberNotificationService:
                 session.refresh(row)
             except IntegrityError as exc:
                 session.rollback()
-                raise DuplicateNotificationError(name) from exc
+                # Only translate the name-uniqueness violation; let other
+                # integrity errors (CHECK constraints, etc.) propagate so
+                # callers get an accurate error, not a misleading
+                # DuplicateNotificationError.
+                if _NAME_UNIQUE_MARKER in str(exc.orig):
+                    raise DuplicateNotificationError(name) from exc
+                raise
         return row
 
     def list_all(self) -> list[MemberNotification]:
@@ -233,15 +312,28 @@ class MemberNotificationService:
 
         Raises:
             ValueError: If a ``cadence`` field is provided with an invalid
-                value.
+                value, or if an unknown or immutable field key is supplied.
+            InvalidDiscordIdError: If ``target_discord_id`` is provided
+                but is not a non-empty all-digits string (spec § 2.4).
             NotificationNotFoundError: If no notification named *name*
                 exists.
         """
+        # Reject unknown or immutable field keys upfront.
+        unknown = set(fields) - _MUTABLE_FIELDS
+        if unknown:
+            raise ValueError(
+                f"Unknown or immutable field(s): {sorted(unknown)!r}. "
+                f"Mutable fields are: {sorted(_MUTABLE_FIELDS)!r}."
+            )
+
         if "cadence" in fields and fields["cadence"] not in _VALID_CADENCES:
             raise ValueError(
                 f"Invalid cadence {fields['cadence']!r}; must be one of "
                 f"{sorted(_VALID_CADENCES)}."
             )
+
+        if "target_discord_id" in fields:
+            _validate_discord_id(str(fields["target_discord_id"]))
 
         with self._session_factory() as session:
             row = session.execute(

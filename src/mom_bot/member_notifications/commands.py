@@ -41,6 +41,7 @@ import discord
 import discord.app_commands as app_commands
 
 from mom_bot.member_notifications.service import (
+    _VALID_CADENCES,
     DuplicateNotificationError,
     MemberNotificationService,
     NotificationNotFoundError,
@@ -68,6 +69,7 @@ _INVALID_TIME_MSG = (
     "Invalid time — expected format HH:MM with a valid hour (0-23) and "
     "minute (0-59), e.g. '09:00'. Seconds are not permitted."
 )
+_INVALID_CADENCE_MSG = "Invalid cadence — must be one of 'weekly', 'biweekly', or 'monthly'."
 
 # Regex: exactly HH:MM (no seconds, no extra chars).
 _TIME_RE = re.compile(r"^\d{2}:\d{2}$")
@@ -181,6 +183,10 @@ async def member_notify_add(
     parsed_time = _parse_time(time)
     if parsed_time is None:
         await interaction.followup.send(_INVALID_TIME_MSG, ephemeral=True)
+        return
+
+    if cadence not in _VALID_CADENCES:
+        await interaction.followup.send(_INVALID_CADENCE_MSG, ephemeral=True)
         return
 
     target_discord_id = str(member.id)
@@ -368,6 +374,9 @@ async def member_notify_update(
         fields["fire_time_utc"] = parsed_time
 
     if cadence is not None:
+        if cadence not in _VALID_CADENCES:
+            await interaction.followup.send(_INVALID_CADENCE_MSG, ephemeral=True)
+            return
         fields["cadence"] = cadence
 
     if message is not None:
