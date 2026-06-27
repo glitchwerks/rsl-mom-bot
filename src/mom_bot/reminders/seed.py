@@ -70,7 +70,7 @@ from sqlalchemy.orm import Session
 from mom_bot.config import ConfigError, load_secret
 from mom_bot.reminders.models import Reminder
 
-__all__ = ["_maybe_seed_reminders"]
+__all__ = ["_maybe_seed_reminders", "seed_tank_week_reminders"]
 
 _logger = logging.getLogger(__name__)
 
@@ -165,6 +165,21 @@ CHIMERA_TEMPLATE: str = (
     "Make sure to participate and help the clan!"
 )
 
+# Tank Week message templates (officer-approved copy).
+# To revise wording: edit these constants and open a PR; a small data
+# migration or manual UPDATE will refresh already-seeded rows.
+HYDRA_TANK_WEEK_HEADSUP_TEMPLATE: str = (
+    ":shield: **Tank Week Incoming!** :shield:\n"
+    "Tank Week starts tomorrow — hit the bare minimum for the max chest, no more!\n"
+    "Clear the top reward tier, then hold. Don't overhit the boss."
+)
+
+HYDRA_TANK_WEEK_END_TEMPLATE: str = (
+    ":shield: **Hydra Tank Week — Final Hours!** :shield:\n"
+    "Less than 24 hours left — make sure you've locked in the max chest, then stop!\n"
+    "Bare minimum for the reward, nothing extra. Don't overhit."
+)
+
 
 # ---------------------------------------------------------------------------
 # Public function
@@ -230,7 +245,9 @@ def _maybe_seed_reminders(
         )
         return
 
-    _logger.info("_maybe_seed_reminders: table empty; seeding Hydra + Chimera")
+    _logger.info(
+        "_maybe_seed_reminders: table empty; seeding Hydra, Chimera, " "and two tank-week rows"
+    )
 
     try:
         guild_id = _load_int_secret("guild-id")
@@ -306,13 +323,110 @@ def _maybe_seed_reminders(
                 message_template=CHIMERA_TEMPLATE,
                 role_mention_id=role_mention_id,
             ),
+            Reminder(
+                name="Hydra Tank Week Heads-up",
+                channel_id=channel_id,
+                weekday=1,
+                fire_time_utc=datetime.time(7, 0, 0),
+                message_template=HYDRA_TANK_WEEK_HEADSUP_TEMPLATE,
+                role_mention_id=role_mention_id,
+                month_condition="tank_week_headsup",
+            ),
+            Reminder(
+                name="Hydra Tank Week End",
+                channel_id=channel_id,
+                weekday=1,
+                fire_time_utc=datetime.time(7, 0, 0),
+                message_template=HYDRA_TANK_WEEK_END_TEMPLATE,
+                role_mention_id=role_mention_id,
+                month_condition="tank_week_end",
+            ),
         ]
     )
     session.commit()
     _logger.info(
-        "_maybe_seed_reminders: seeded Hydra and Chimera " "(channel=%r → id=%d, role=%r → id=%d)",
+        "_maybe_seed_reminders: seeded Hydra, Chimera, and two tank-week rows "
+        "(channel=%r → id=%d, role=%r → id=%d)",
         channel_name,
         channel_id,
         role_name,
         role_mention_id,
     )
+
+
+def seed_tank_week_reminders(session: Session) -> None:
+    """Insert tank-week reminder rows into an already-seeded database.
+
+    This is the data-migration entry point for environments where Hydra and
+    Chimera were already seeded (dev + prod, per spec §3 item 2).  The
+    empty-table guard in :func:`_maybe_seed_reminders` would never fire in
+    those environments, so this function provides the equivalent path.
+
+    Behavior:
+    - Copies ``channel_id`` and ``role_mention_id`` from the existing
+      ``Hydra`` row (no Discord gateway access at migration time).
+    - Each INSERT is guarded by a ``WHERE NOT EXISTS`` check on the row
+      name, so calling this function multiple times is idempotent.
+    - If no ``Hydra`` row exists (fresh/empty DB), the function is a
+      safe no-op — first-boot seeding covers that path instead.
+
+    Args:
+        session: An open :class:`~sqlalchemy.orm.Session` with write access
+            to the ``reminders`` table.  The caller is responsible for
+            managing transaction scope; this function commits only the rows
+            it inserts.
+    """
+    from sqlalchemy import select  # local import to avoid circular at module level
+
+    hydra = session.execute(select(Reminder).where(Reminder.name == "Hydra")).scalar_one_or_none()
+
+    if hydra is None:
+        _logger.debug(
+            "seed_tank_week_reminders: no Hydra row found; "
+            "skipping (fresh-boot path will cover this)"
+        )
+        return
+
+    channel_id: int = hydra.channel_id
+    role_mention_id: int | None = hydra.role_mention_id
+
+    rows_to_insert = [
+        ("Hydra Tank Week Heads-up", "tank_week_headsup", HYDRA_TANK_WEEK_HEADSUP_TEMPLATE),
+        ("Hydra Tank Week End", "tank_week_end", HYDRA_TANK_WEEK_END_TEMPLATE),
+    ]
+
+    inserted_names: list[str] = []
+    for name, condition, template in rows_to_insert:
+        existing = session.execute(
+            select(Reminder).where(Reminder.name == name)
+        ).scalar_one_or_none()
+        if existing is not None:
+            _logger.debug(
+                "seed_tank_week_reminders: row %r already exists; skipping",
+                name,
+            )
+            continue
+
+        session.add(
+            Reminder(
+                name=name,
+                channel_id=channel_id,
+                weekday=1,
+                fire_time_utc=datetime.time(7, 0, 0),
+                message_template=template,
+                role_mention_id=role_mention_id,
+                month_condition=condition,
+            )
+        )
+        inserted_names.append(name)
+
+    # Commit once after staging all new rows so both rows land atomically.
+    # A failure on the second row therefore cannot leave a half-seeded state.
+    if inserted_names:
+        session.commit()
+        for name in inserted_names:
+            _logger.info(
+                "seed_tank_week_reminders: inserted %r (channel_id=%d)",
+                name,
+                channel_id,
+            )

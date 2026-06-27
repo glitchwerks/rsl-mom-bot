@@ -83,7 +83,18 @@ class Reminder(Base):
     """
 
     __tablename__ = "reminders"
-    __table_args__ = (CheckConstraint("weekday >= 0 AND weekday <= 6", name="ck_weekday"),)
+    __table_args__ = (
+        CheckConstraint("weekday >= 0 AND weekday <= 6", name="ck_weekday"),
+        CheckConstraint(
+            "month_condition IS NULL OR month_condition IN "
+            "('tank_week_headsup', 'tank_week_end')",
+            name="ck_month_condition",
+        ),
+        CheckConstraint(
+            "delivery_target IN ('channel', 'dm')",
+            name="ck_delivery_target",
+        ),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     name: Mapped[str] = mapped_column(Text, nullable=False, unique=True)
@@ -92,6 +103,12 @@ class Reminder(Base):
     fire_time_utc: Mapped[datetime.time] = mapped_column(Time, nullable=False)
     message_template: Mapped[str] = mapped_column(Text, nullable=False)
     role_mention_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    month_condition: Mapped[str | None] = mapped_column(Text, nullable=True)
+    delivery_target: Mapped[str] = mapped_column(
+        Text,
+        nullable=False,
+        server_default="channel",
+    )
     created_at: Mapped[datetime.datetime] = mapped_column(
         nullable=False, server_default=func.current_timestamp()
     )

@@ -299,7 +299,7 @@ async def test_setup_hook_seeds_and_starts_scheduler() -> None:
         from sqlalchemy import func
 
         count = session.scalar(select(func.count()).select_from(Reminder))
-    assert count == 2, f"Expected 2 seeded rows, got {count}"
+    assert count == 4, f"Expected 4 seeded rows, got {count}"
 
     # Assert scheduler task was stored.
     assert hasattr(bot, "_reminder_task"), "bot._reminder_task not set by setup_hook"
