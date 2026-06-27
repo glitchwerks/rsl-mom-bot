@@ -505,6 +505,47 @@ MemberNotification` row to fire.
                         exc,
                     )
                     return
+                except (
+                    TimeoutError,
+                    discord.RateLimited,
+                    aiohttp.ClientError,
+                ) as exc:
+                    # Transient lookup failure — unmark row so next tick
+                    # retries (spec § 2.3 finding 7, resolve step taxonomy).
+                    store.unmark(notif.id, today_date)
+                    _logger.error(
+                        "scheduler: transient fetch_member error for "
+                        "notification %r on %s: %s — row deleted for retry",
+                        notif.name,
+                        today_date,
+                        exc,
+                    )
+                    raise
+                except discord.HTTPException as exc:
+                    if exc.status >= 500:
+                        # Transient server-side error during member lookup.
+                        store.unmark(notif.id, today_date)
+                        _logger.error(
+                            "scheduler: fetch_member HTTPException "
+                            "status=%d for notification %r on %s "
+                            "— row deleted for retry: %s",
+                            exc.status,
+                            notif.name,
+                            today_date,
+                            exc,
+                        )
+                        raise
+                    # Other 4xx — permanent drop (row stays).
+                    _logger.error(
+                        "scheduler: fetch_member HTTPException "
+                        "status=%d for notification %r on %s: %s "
+                        "— dropping (row stays)",
+                        exc.status,
+                        notif.name,
+                        today_date,
+                        exc,
+                    )
+                    return
 
             # Step 3 — send the DM.
             try:

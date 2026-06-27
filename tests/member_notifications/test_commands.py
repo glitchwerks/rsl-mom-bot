@@ -696,3 +696,171 @@ def test_register_attaches_five_commands_to_tree() -> None:
     register(tree=tree, service=service)
 
     assert tree.command.call_count == 5
+
+
+# ---------------------------------------------------------------------------
+# Regression tests — P3: /member-notify-update missing schedule params
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_update_start_date_changes_anchor_date_utc() -> None:
+    """/member-notify-update with start_date updates anchor_date_utc.
+
+    Regression for PR #277 finding P3: the ``/member-notify-update`` command
+    wrapper only exposed ``enabled``, ``cadence``, and ``message``.  The
+    ``member``, ``start_date``, and ``time`` params were missing from the
+    wrapper signature, so Discord never included them as options and officers
+    could not change recipient or schedule via the partial-update path.
+
+    This test verifies that passing ``start_date`` through the update handler
+    correctly updates the ``anchor_date_utc`` field on the stored row.
+    """
+    engine = _make_engine()
+    service = _make_service(engine)
+
+    service.create(
+        name=_DEFAULT_NAME,
+        target_discord_id=str(_TARGET_DISCORD_ID),
+        anchor_date_utc=datetime.date(2027, 6, 1),
+        fire_time_utc=datetime.time(9, 0),
+        cadence="weekly",
+        message_template=_DEFAULT_MESSAGE,
+    )
+
+    interaction = _make_interaction()
+    _, _, _, update_cmd, _ = _import_handlers()
+    await update_cmd(
+        interaction,
+        service=service,
+        name=_DEFAULT_NAME,
+        start_date="2028-01-15",
+    )
+
+    interaction.followup.send.assert_awaited_once()
+    row = service.get(_DEFAULT_NAME)
+    assert row is not None
+    assert row.anchor_date_utc == datetime.date(
+        2028, 1, 15
+    ), f"Expected anchor_date_utc=2028-01-15, got {row.anchor_date_utc!r}"
+
+
+@pytest.mark.asyncio
+async def test_update_time_changes_fire_time_utc() -> None:
+    """/member-notify-update with time updates fire_time_utc."""
+    engine = _make_engine()
+    service = _make_service(engine)
+
+    service.create(
+        name=_DEFAULT_NAME,
+        target_discord_id=str(_TARGET_DISCORD_ID),
+        anchor_date_utc=datetime.date(2027, 6, 1),
+        fire_time_utc=datetime.time(9, 0),
+        cadence="weekly",
+        message_template=_DEFAULT_MESSAGE,
+    )
+
+    interaction = _make_interaction()
+    _, _, _, update_cmd, _ = _import_handlers()
+    await update_cmd(
+        interaction,
+        service=service,
+        name=_DEFAULT_NAME,
+        time="14:30",
+    )
+
+    interaction.followup.send.assert_awaited_once()
+    row = service.get(_DEFAULT_NAME)
+    assert row is not None
+    assert row.fire_time_utc == datetime.time(
+        14, 30
+    ), f"Expected fire_time_utc=14:30, got {row.fire_time_utc!r}"
+
+
+@pytest.mark.asyncio
+async def test_update_member_changes_target_discord_id() -> None:
+    """/member-notify-update with member updates target_discord_id."""
+    engine = _make_engine()
+    service = _make_service(engine)
+
+    service.create(
+        name=_DEFAULT_NAME,
+        target_discord_id=str(_TARGET_DISCORD_ID),
+        anchor_date_utc=datetime.date(2027, 6, 1),
+        fire_time_utc=datetime.time(9, 0),
+        cadence="weekly",
+        message_template=_DEFAULT_MESSAGE,
+    )
+
+    new_member_id = 777666555444333222
+    new_member = _make_member(discord_id=new_member_id)
+
+    interaction = _make_interaction()
+    _, _, _, update_cmd, _ = _import_handlers()
+    await update_cmd(
+        interaction,
+        service=service,
+        name=_DEFAULT_NAME,
+        member=new_member,
+    )
+
+    interaction.followup.send.assert_awaited_once()
+    row = service.get(_DEFAULT_NAME)
+    assert row is not None
+    assert row.target_discord_id == str(new_member_id), (
+        f"Expected target_discord_id={new_member_id!r}, " f"got {row.target_discord_id!r}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_update_malformed_start_date_sends_validation_ephemeral() -> None:
+    """/member-notify-update with bad start_date sends validation msg, no DB call.
+
+    Regression for PR #277 finding P3: validates that the update wrapper
+    applies the same date-validation guard as the add command.  A malformed
+    ``start_date`` must yield an ephemeral validation message and must NOT
+    call the service.
+    """
+    engine = _make_engine()
+    service = _make_service(engine)
+    mock_service = MagicMock(wraps=service)
+    interaction = _make_interaction()
+
+    _, _, _, update_cmd, _ = _import_handlers()
+    await update_cmd(
+        interaction,
+        service=mock_service,
+        name=_DEFAULT_NAME,
+        start_date="not-a-date",
+    )
+
+    interaction.followup.send.assert_awaited_once()
+    kwargs = interaction.followup.send.call_args[1]
+    assert kwargs.get("ephemeral") is True
+    mock_service.update.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_update_malformed_time_sends_validation_ephemeral() -> None:
+    """/member-notify-update with bad time sends validation msg, no DB call.
+
+    Regression for PR #277 finding P3: validates that the update wrapper
+    applies the same time-validation guard as the add command.
+    """
+    engine = _make_engine()
+    service = _make_service(engine)
+    mock_service = MagicMock(wraps=service)
+    interaction = _make_interaction()
+
+    _, _, _, update_cmd, _ = _import_handlers()
+    await update_cmd(
+        interaction,
+        service=mock_service,
+        name=_DEFAULT_NAME,
+        time="99:99",
+    )
+
+    interaction.followup.send.assert_awaited_once()
+    kwargs = interaction.followup.send.call_args[1]
+    assert kwargs.get("ephemeral") is True
+    mock_service.update.assert_not_called()

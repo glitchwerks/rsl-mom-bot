@@ -872,3 +872,82 @@ async def test_close_calls_runner_cleanup(
         await bot.close()
 
     runner_mock.cleanup.assert_awaited_once()
+
+
+# ---------------------------------------------------------------------------
+# Regression test — P1: member-notify commands registered before sync
+# ---------------------------------------------------------------------------
+
+
+_MEMBER_NOTIFY_COMMAND_NAMES = {
+    "member-notify-add",
+    "member-notify-list",
+    "member-notify-get",
+    "member-notify-update",
+    "member-notify-remove",
+}
+
+
+@pytest.mark.asyncio
+async def test_member_notify_commands_registered_before_sync(
+    mock_health_server: AsyncMock,
+) -> None:
+    """setup_hook() must register member-notify commands BEFORE tree.sync().
+
+    Regression for PR #277 finding P1: the five ``/member-notify-*`` commands
+    were previously registered in the post-READY background task — AFTER
+    ``tree.copy_global_to`` / ``tree.sync`` had already run.  Discord only
+    receives commands present on the tree AT sync time, so the commands were
+    invisible to officers on a fresh deploy.
+
+    This test drives ``setup_hook`` with a real ``CommandTree`` (not a
+    MagicMock) and a ``tree.sync`` mock that records which commands are
+    registered at the moment it is called.  The assertion verifies that all
+    five member-notify command names are present in the tree BEFORE sync is
+    awaited.
+    """
+    from mom_bot.main import MomBot, build_intents
+
+    load_secret_values = {
+        "guild-id": str(_GUILD_ID),
+        "reminder-channel-name": _CHANNEL_NAME,
+        "reminder-mention-role-name": _ROLE_NAME,
+    }
+
+    def fake_load_secret(name: str) -> str:
+        return load_secret_values[name]
+
+    bot = MomBot(intents=build_intents())
+
+    # Capture the command names present on the tree at the moment sync fires.
+    commands_at_sync_time: set[str] = set()
+
+    async def _capture_sync(**kwargs: object) -> None:
+        """Record tree command names at sync time."""
+        commands_at_sync_time.update(cmd.name for cmd in bot.tree.get_commands())
+
+    with (
+        patch("mom_bot.main.load_secret", side_effect=fake_load_secret),
+        patch.object(bot.tree, "sync", side_effect=_capture_sync),
+        patch(
+            "mom_bot.main._build_session_factory",
+            return_value=MagicMock(),
+        ),
+    ):
+        await bot.setup_hook()
+
+    # All five member-notify commands must be present at sync time.
+    missing = _MEMBER_NOTIFY_COMMAND_NAMES - commands_at_sync_time
+    assert not missing, (
+        f"Commands {missing!r} were NOT present on the tree when "
+        "tree.sync() was called — they will be invisible to Discord on "
+        "a fresh deploy.  Register them in setup_hook BEFORE sync."
+    )
+
+    # Clean up background task.
+    if bot._reminder_task is not None:
+        bot._reminder_task.cancel()
+        try:
+            await bot._reminder_task
+        except asyncio.CancelledError:
+            pass

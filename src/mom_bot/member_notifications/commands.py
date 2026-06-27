@@ -530,6 +530,9 @@ def register(
         enabled: bool | None = None,
         cadence: str | None = None,
         message: str | None = None,
+        member: discord.Member | None = None,
+        start_date: str | None = None,
+        time: str | None = None,
     ) -> None:
         """Delegate to :func:`member_notify_update`.
 
@@ -539,6 +542,9 @@ def register(
             enabled: Optional new enabled flag.
             cadence: Optional new cadence.
             message: Optional new message body.
+            member: Optional new target guild member.
+            start_date: Optional new ISO date string (``YYYY-MM-DD``).
+            time: Optional new time string (``HH:MM``).
         """
         await member_notify_update(
             interaction,
@@ -547,6 +553,9 @@ def register(
             enabled=enabled,
             cadence=cadence,
             message=message,
+            member=member,
+            start_date=start_date,
+            time=time,
         )
 
     @tree.command(

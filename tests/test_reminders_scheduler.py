@@ -1643,6 +1643,72 @@ async def test_insert_first_departed_member_consumes_daily_slot() -> None:
 
 
 # ---------------------------------------------------------------------------
+# Regression test — P2: transient fetch_member failure unmarks row for retry
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_fetch_member_5xx_row_deleted_retried_next_tick() -> None:
+    """fetch_member 5xx HTTPException → row deleted, retry on next tick.
+
+    Regression for PR #277 finding P2: a transient HTTPException (status
+    >= 500) raised by ``guild.fetch_member`` after ``mark_sent()`` committed
+    the idempotency row was previously left unhandled.  The outer per-tick
+    ``except`` suppressed it, leaving the row in place and silently dropping
+    the occurrence for the calendar day.
+
+    Fix: treat transient ``fetch_member`` failures the same as transient
+    ``member.send()`` failures (spec § 2.3 finding 7) — ``unmark()`` the
+    row and re-raise so the next tick retries.
+
+    This test mirrors ``test_dm_5xx_row_deleted_retried_next_tick`` but
+    places the 5xx on the ``fetch_member`` step (cache-miss path) rather
+    than on ``member.send``.
+    """
+    engine = _make_engine_with_member_notifications()
+
+    # Do NOT add the member to the guild cache so fetch_member is called.
+    guild = FakeGuild()
+    guild.set_fetch_side_effect(
+        _MEMBER_DISCORD_ID,
+        discord.HTTPException(MagicMock(status=503, reason="Service Unavailable"), "test"),
+    )
+
+    with Session(engine) as s:
+        _seed_member_notification(
+            s,
+            anchor_date_utc=_NOTIFICATION_ANCHOR,
+            fire_time_utc=_MEMBER_FIRE_TIME,
+        )
+
+    bot = FakeBot(ready=True)
+    scheduler = _make_scheduler_with_guild(bot, guild, engine, tick_seconds=0.05)
+
+    # Run one tick — fetch_member raises 503.  The row must be deleted so
+    # the next tick can retry.
+    with time_machine.travel(_TUESDAY_0700, tick=False):
+        task = asyncio.create_task(scheduler.run())
+        # Wait long enough for at least one tick to complete.
+        await asyncio.sleep(0.12)
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+
+    from mom_bot.member_notifications.models import MemberNotificationSent
+
+    with Session(engine) as s:
+        count = s.query(MemberNotificationSent).count()
+
+    assert count == 0, (
+        "Expected the member_notification_sent row to be deleted after a "
+        "transient fetch_member 5xx so the next tick can retry.  "
+        f"Got {count} row(s) — the occurrence was silently dropped."
+    )
+
+
+# ---------------------------------------------------------------------------
 # Regression guard — existing channel reminders unaffected
 # ---------------------------------------------------------------------------
 

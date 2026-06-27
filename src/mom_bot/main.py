@@ -172,6 +172,15 @@ SiegeWebClient` instance registered via :func:`make_client`; stored so
 
         guild_id = int(load_secret("guild-id"))
         self.guild = discord.Object(id=guild_id)
+
+        # Register member-notify commands BEFORE sync so Discord receives
+        # the full command set on every deploy (fix for PR #277 finding P1).
+        # The session factory only needs the DB URL — no gateway connection
+        # required — so it is safe to build here in setup_hook.
+        _mn_factory = _build_session_factory(_resolve_db_url())
+        mn_service = MemberNotificationService(session_factory=_mn_factory)
+        _register_member_notifications(tree=self.tree, service=mn_service)
+
         self.tree.copy_global_to(guild=self.guild)
         await self.tree.sync(guild=self.guild)
         _logger.info("Synced slash commands to guild %s", guild_id)
@@ -234,11 +243,6 @@ SiegeWebClient` instance registered via :func:`make_client`; stored so
             # Pass self so seed.py can resolve the channel name → snowflake.
             with factory() as session:
                 _maybe_seed_reminders(session, self)
-
-            # Register member-notification slash commands now that the
-            # session factory is available (§ 2.5).
-            mn_service = MemberNotificationService(session_factory=factory)
-            _register_member_notifications(tree=self.tree, service=mn_service)
 
             # Run the scheduler loop for the bot's lifetime (plan § 6).
             guild_id = int(load_secret("guild-id"))
