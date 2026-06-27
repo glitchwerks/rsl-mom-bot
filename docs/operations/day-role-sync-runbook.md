@@ -78,15 +78,19 @@ skip steps — the sequence exists to catch configuration errors before live tra
 
 2. **Confirm mom-bot B2 is deployed.** Check that the mom-bot Container App is running the
    revision that includes the `POST /api/internal/role-sync` endpoint. Verify with a probe
-   request (no `Authorization` header — the response proves the route and the IP allowlist
-   are both behaving as expected):
+   request (no `Authorization` header — the response body and status together prove whether
+   the route and the IP allowlist are behaving as expected):
    ```bash
-   curl -s -o /dev/null -w "%{http_code}" \
+   curl -s -i \
      https://<mom-bot-hostname>/api/internal/role-sync \
      -X POST \
      -H "Content-Type: application/json" \
      -d '{}'
    ```
+
+   The `-i` flag surfaces both the HTTP status line and the response body. The body — not
+   just the status code — is what the disambiguation table below keys on; `403` alone is
+   ambiguous between a platform deny and an app-layer rejection.
 
    **Expected response depends on your caller IP** (see also the disambiguation table below):
 
@@ -117,10 +121,14 @@ skip steps — the sequence exists to catch configuration errors before live tra
    **Revision-transition failure case (issue #196):** if a non-allowlisted caller observes
    `403 {"detail":"Not authenticated"}` — the app-layer body rather than the platform-edge
    body — during or immediately after a revision activation or rollback, the ACA IP allowlist
-   is transiently unenforced on the activating revision. This is expected transient behavior
-   bounded to the revision-activation window. Wait approximately 60 seconds for the revision
-   to reach steady state and retry; the platform-edge `403` should be restored. This is not a
-   defect in the allowlist configuration.
+   is transiently unenforced on the activating revision. This behavior was observed empirically
+   during the #196 rollout; Microsoft's ACA documentation does not address `ipSecurityRestrictions`
+   enforcement during the revision-activation window, so this is not a documented platform
+   guarantee. During that window, a non-allowlisted IP can reach the app layer — a brief
+   defense-in-depth gap — but the bearer token remains the primary trust boundary and will
+   still reject any unauthenticated request. The allowlist configuration itself is correct;
+   steady-state enforcement is confirmed. Wait approximately 60 seconds for the revision to
+   reach steady state and retry; the platform-edge `403` should be restored.
 
 3. **Curl-smoke the sidecar endpoint directly.** Send a valid payload with the correct bearer
    token. This tests the mom-bot receiver in isolation, without siege-web involved.
