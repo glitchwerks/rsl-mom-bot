@@ -90,6 +90,10 @@ class Reminder(Base):
             "('tank_week_headsup', 'tank_week_end')",
             name="ck_month_condition",
         ),
+        CheckConstraint(
+            "delivery_target IN ('channel', 'dm')",
+            name="ck_delivery_target",
+        ),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)

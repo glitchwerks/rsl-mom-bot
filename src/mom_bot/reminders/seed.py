@@ -386,6 +386,7 @@ def seed_tank_week_reminders(session: Session) -> None:
         ("Hydra Tank Week End", "tank_week_end", HYDRA_TANK_WEEK_END_TEMPLATE),
     ]
 
+    inserted_names: list[str] = []
     for name, condition, template in rows_to_insert:
         existing = session.execute(
             select(Reminder).where(Reminder.name == name)
@@ -408,9 +409,15 @@ def seed_tank_week_reminders(session: Session) -> None:
                 month_condition=condition,
             )
         )
+        inserted_names.append(name)
+
+    # Commit once after staging all new rows so both rows land atomically.
+    # A failure on the second row therefore cannot leave a half-seeded state.
+    if inserted_names:
         session.commit()
-        _logger.info(
-            "seed_tank_week_reminders: inserted %r (channel_id=%d)",
-            name,
-            channel_id,
-        )
+        for name in inserted_names:
+            _logger.info(
+                "seed_tank_week_reminders: inserted %r (channel_id=%d)",
+                name,
+                channel_id,
+            )

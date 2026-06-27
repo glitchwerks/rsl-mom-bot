@@ -20,6 +20,7 @@ from unittest.mock import MagicMock, patch
 import discord
 import pytest
 from sqlalchemy import create_engine, func, inspect, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from mom_bot.db import Base
@@ -374,3 +375,63 @@ def test_data_migration_noop_when_no_hydra_row(session: Session) -> None:
 
     count = session.scalar(select(func.count(Reminder.id)))
     assert count == 0, f"Expected 0 rows on empty-table no-op, got {count}"
+
+
+# ---------------------------------------------------------------------------
+# Schema: delivery_target CHECK constraint (review-remediation hardening)
+# ---------------------------------------------------------------------------
+
+
+def test_delivery_target_check_rejects_invalid_value(session: Session) -> None:
+    """delivery_target CHECK rejects values other than 'channel' or 'dm'.
+
+    The model-level CheckConstraint is enforced by SQLite when the table is
+    created via Base.metadata.create_all(), so an invalid value raises
+    IntegrityError at commit time.
+    """
+    reminder = Reminder(
+        name="BadTarget",
+        channel_id=_CHANNEL_ID,
+        weekday=1,
+        fire_time_utc=datetime.time(7, 0, 0),
+        message_template="test",
+        role_mention_id=None,
+        delivery_target="foo",
+    )
+    session.add(reminder)
+    with pytest.raises(IntegrityError):
+        session.commit()
+
+
+def test_delivery_target_check_accepts_channel(session: Session) -> None:
+    """delivery_target='channel' is accepted by the CHECK constraint."""
+    reminder = Reminder(
+        name="ChannelTarget",
+        channel_id=_CHANNEL_ID,
+        weekday=1,
+        fire_time_utc=datetime.time(7, 0, 0),
+        message_template="test",
+        role_mention_id=None,
+        delivery_target="channel",
+    )
+    session.add(reminder)
+    session.commit()
+    session.refresh(reminder)
+    assert reminder.delivery_target == "channel"
+
+
+def test_delivery_target_check_accepts_dm(session: Session) -> None:
+    """delivery_target='dm' is accepted by the CHECK constraint."""
+    reminder = Reminder(
+        name="DmTarget",
+        channel_id=_CHANNEL_ID,
+        weekday=1,
+        fire_time_utc=datetime.time(7, 0, 0),
+        message_template="test",
+        role_mention_id=None,
+        delivery_target="dm",
+    )
+    session.add(reminder)
+    session.commit()
+    session.refresh(reminder)
+    assert reminder.delivery_target == "dm"

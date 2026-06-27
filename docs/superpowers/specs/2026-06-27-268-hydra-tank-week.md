@@ -39,7 +39,7 @@ Hydra clashes run Wednesday → the following Tuesday. **Tank Week** is the firs
 
 Two new notices are wanted, both clan-wide and both fired to the existing reminder channel:
 
-1. **Tank-week heads-up** — a *unique* (once-per-occurrence) heads-up that fires the day **before** the tank-week-start Wednesday — i.e. the Tuesday before that Wednesday. That Tuesday is the **ending Tuesday of the prior clash**, which is the Tuesday **8 days before** the tank-week ending Tuesday. Fires at the existing Hydra slot (Tue 07:00 UTC, same channel) — confirmed by user.
+1. **Tank-week heads-up** — a *unique* (once-per-occurrence) heads-up that fires the day **before** the tank-week-start Wednesday — i.e. the Tuesday before that Wednesday. That Tuesday is the **ending Tuesday of the prior clash**, which is the Tuesday **7 days before** the tank-week ending Tuesday (= the prior clash's ending Tuesday; one week earlier, also a Tuesday). Fires at the existing Hydra slot (Tue 07:00 UTC, same channel) — confirmed by user. (Derivation: tank-week start Wed = ending Tue − 6; heads-up = start Wed − 1 = ending Tue − 7.)
 2. **End-of-tank Hydra reminder** — a *unique* reminder that **replaces** the standard Hydra reminder for the tank-week occurrence (not in addition to it). Fires in the same Tue 07:00 UTC slot, suppressing the normal Hydra row for that one date.
 
 ### Current state (verified)
@@ -66,12 +66,12 @@ def tank_week_ending_tuesday(year: int, month: int) -> datetime.date:
 
 Derived dates (also pure helpers):
 
-- **Heads-up fire date** for a given month's tank week = `tank_week_ending_tuesday(y, m) - timedelta(days=8)` (the prior clash's ending Tuesday).
+- **Heads-up fire date** for a given month's tank week = `tank_week_ending_tuesday(y, m) - timedelta(days=7)` (the prior clash's ending Tuesday — exactly one week before, so also a Tuesday).
 - **End-of-tank fire date** = `tank_week_ending_tuesday(y, m)` itself.
 
 Two boolean predicates the scheduler calls per tick, given `today_date`:
 
-- `is_tank_week_headsup_date(today)` — true iff `today` equals the heads-up date for the month whose tank week it precedes. Note the heads-up for an early-month tank week can fall in the **previous** calendar month (when the first Tuesday is the 1st–7th, minus 8 days crosses the month boundary), so the predicate computes the candidate from `today + timedelta(days=8)`'s month, not `today`'s month. The spec's reference implementation derives the target month from `(today + timedelta(days=8))`.
+- `is_tank_week_headsup_date(today)` — true iff `today` equals the heads-up date for the month whose tank week it precedes. Note the heads-up for an early-month tank week can fall in the **previous** calendar month (when the first Tuesday is the 1st–7th, minus 7 days crosses the month boundary), so the predicate computes the candidate from `today + timedelta(days=7)`'s month, not `today`'s month. The spec's reference implementation derives the target month from `(today + timedelta(days=7))`.
 - `is_end_of_tank_date(today)` — true iff `today == tank_week_ending_tuesday(today.year, today.month)`.
 
 > **Simplicity-first note:** No recurrence-rule engine, no cron descriptor, no general "calendar condition DSL." The two predicates are the entire calendar surface. This is the smallest mechanism that satisfies the rules; a generic descriptor would be speculative scope and is explicitly rejected.
@@ -123,7 +123,7 @@ Steps 1-3 are pure list transforms; only step 4 calls `mark_sent` or sends. No `
 
 Idempotency is unaffected: the normal Hydra's `ReminderSent` row is simply never written for that date (it was suppressed, not sent), so no stale "sent" record blocks a future date. The `tank_week_end` row gets its own `ReminderSent` row keyed on its own `reminder_id`.
 
-> **Edge case to test:** the heads-up date (8 days before) and the end-of-tank date are different Tuesdays, so heads-up and end never collide. The only collision is end-of-tank vs normal Hydra on the same Tuesday, handled above.
+> **Edge case to test:** the heads-up date (7 days before) and the end-of-tank date are different Tuesdays (one week apart), so heads-up and end never collide. The only collision is end-of-tank vs normal Hydra on the same Tuesday, handled above.
 
 ### 2.5 Seed change
 
@@ -154,9 +154,9 @@ Two Alembic migrations (slug-named, matching the `b2_member_role_sync_state` con
 New `tests/test_reminders_calendar.py` (pure, no DB):
 
 - `tank_week_ending_tuesday` for months where the 1st is a Tuesday (it IS the answer), and where it is not.
-- Heads-up date = ending Tuesday − 8 days; verify the cross-month case (early-month tank week → heads-up in prior month).
+- Heads-up date = ending Tuesday − 7 days (one week earlier, also a Tuesday); verify the cross-month case (early-month tank week → heads-up in prior month).
 - `is_tank_week_headsup_date` / `is_end_of_tank_date` true/false boundaries across a full year of months.
-- **Cross-year boundary (required):** pin a year whose first Tuesday of January falls on Jan 1 (e.g. find a year where Jan 1 is a Tuesday) and assert the heads-up date computes to **Dec 24 of the prior year**. `date + timedelta(days=8)` and the `−8` subtraction both handle year rollover natively, but the year-boundary case must have explicit coverage — it is the one arithmetic path most likely to be silently wrong in a hand-rolled month-derivation.
+- **Cross-year boundary (required):** pin a year whose first Tuesday of January falls on Jan 1 and assert the heads-up date computes to **Dec 25 of the prior year**. Concretely: **Jan 1 2019 is a Tuesday** → first Tuesday of Jan 2019 = Jan 1 → heads-up = Jan 1 − 7 = **Dec 25 2018** (also a Tuesday). `date − timedelta(days=7)` handles year rollover natively, but the year-boundary case must have explicit coverage — it is the one arithmetic path most likely to be silently wrong in a hand-rolled month-derivation.
 
 Extend `tests/test_reminders_scheduler.py` (in-memory SQLite, FakeBot/FakeChannel, time_machine — existing harness):
 

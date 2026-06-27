@@ -79,9 +79,21 @@ def upgrade() -> None:
         ),
     )
 
+    # Same dialect guard as month_condition: SQLite cannot ALTER TABLE ADD
+    # CONSTRAINT; the constraint is enforced at the ORM layer on SQLite and
+    # at the DB layer on Postgres.
+    if _is_postgres():
+        op.create_check_constraint(
+            "ck_delivery_target",
+            "reminders",
+            "delivery_target IN ('channel', 'dm')",
+        )
+
 
 def downgrade() -> None:
     """Remove month_condition and delivery_target columns from reminders."""
+    if _is_postgres():
+        op.drop_constraint("ck_delivery_target", "reminders", type_="check")
     op.drop_column("reminders", "delivery_target")
     if _is_postgres():
         op.drop_constraint("ck_month_condition", "reminders", type_="check")
