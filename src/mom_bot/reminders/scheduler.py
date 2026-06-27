@@ -66,6 +66,10 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 import mom_bot.health as health
+from mom_bot.reminders.calendar import (
+    is_end_of_tank_date,
+    is_tank_week_headsup_date,
+)
 from mom_bot.reminders.models import Reminder, ReminderSent  # noqa: F401
 from mom_bot.reminders.sent_store import ReminderSentStore
 
@@ -185,8 +189,11 @@ class ReminderScheduler:
             today_date: UTC calendar date used for idempotency attribution.
         """
         with self._session_factory() as session:
-            # Build the "already sent today" sub-query.
-            sent_today_ids = (
+            # Step 1 — collect the full eligible set (weekday + time + not
+            # sent today).  Calendar-conditional filtering happens below in
+            # Python; the eligible set per tick is small (2-4 rows) so the
+            # cost is negligible and it keeps calendar logic unit-testable.
+            sent_today_subq = (
                 select(ReminderSent.reminder_id).where(ReminderSent.fire_date_utc == today_date)
             ).scalar_subquery()
 
@@ -195,13 +202,90 @@ class ReminderScheduler:
                     select(Reminder)
                     .where(Reminder.weekday == today_weekday)
                     .where(Reminder.fire_time_utc <= now_time)
-                    .where(Reminder.id.not_in(sent_today_ids))
+                    .where(Reminder.id.not_in(sent_today_subq))
                 )
                 .scalars()
                 .all()
             )
 
+            # Step 2 — apply calendar-condition filters.  Rows with a
+            # month_condition value only fire on their specific calendar date;
+            # NULL-condition rows always pass.
+            kept: list[Reminder] = []
             for reminder in eligible:
+                cond = reminder.month_condition
+                if cond is None:
+                    kept.append(reminder)
+                elif cond == "tank_week_headsup":
+                    if is_tank_week_headsup_date(today_date):
+                        kept.append(reminder)
+                elif cond == "tank_week_end":
+                    if is_end_of_tank_date(today_date):
+                        kept.append(reminder)
+                # Unknown values are silently dropped (defensive).
+
+            # Step 3 — suppression pre-filter (spec §2.4).  On the
+            # end-of-tank date, any NULL-condition row sharing the same
+            # (channel_id, weekday, fire_time_utc) slot as a tank_week_end
+            # row must be suppressed — even if the tank_week_end row was
+            # already sent in a prior tick of the same day.
+            #
+            # We compute the suppression set in two parts:
+            # (a) tank_week_end rows in the current kept set (first tick), and
+            # (b) tank_week_end rows already sent today (subsequent ticks).
+            #
+            # Part (a): tank_week_end rows in the current eligible kept set.
+            tank_end_slots: set[tuple[int, int, datetime.time]] = {
+                (r.channel_id, r.weekday, r.fire_time_utc)
+                for r in kept
+                if r.month_condition == "tank_week_end"
+            }
+
+            # Part (b): tank_week_end rows already sent today (handles the
+            # multi-tick case where TankEnd fires on tick 1 but Hydra has
+            # not yet fired — without this, Hydra would fire on tick 2).
+            if is_end_of_tank_date(today_date):
+                already_sent_tank_end = (
+                    session.execute(
+                        select(Reminder)
+                        .join(
+                            ReminderSent,
+                            (ReminderSent.reminder_id == Reminder.id)
+                            & (ReminderSent.fire_date_utc == today_date),
+                        )
+                        .where(Reminder.month_condition == "tank_week_end")
+                        .where(Reminder.weekday == today_weekday)
+                    )
+                    .scalars()
+                    .all()
+                )
+                for r in already_sent_tank_end:
+                    tank_end_slots.add((r.channel_id, r.weekday, r.fire_time_utc))
+
+            if tank_end_slots:
+                survivors: list[Reminder] = []
+                for reminder in kept:
+                    if reminder.month_condition is None:
+                        slot = (
+                            reminder.channel_id,
+                            reminder.weekday,
+                            reminder.fire_time_utc,
+                        )
+                        if slot in tank_end_slots:
+                            _logger.debug(
+                                "scheduler: suppressing reminder %r on %s "
+                                "(replaced by tank_week_end row)",
+                                reminder.name,
+                                today_date,
+                            )
+                            continue
+                    survivors.append(reminder)
+            else:
+                survivors = kept
+
+            # Step 4 — iterate survivors and send.  No side effects before
+            # this point for any suppressed row.
+            for reminder in survivors:
                 await self._handle_reminder(reminder, today_date, session)
 
     async def _handle_reminder(
