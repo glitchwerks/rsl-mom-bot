@@ -46,6 +46,8 @@ from mom_bot import __version__
 from mom_bot.config import load_secret
 from mom_bot.db import build_session_factory as _build_session_factory
 from mom_bot.health import start_health_server
+from mom_bot.member_notifications.commands import register as _register_member_notifications
+from mom_bot.member_notifications.service import MemberNotificationService
 from mom_bot.post_conditions.client import SiegeWebClient
 from mom_bot.post_conditions.commands import register as _register_post_conditions
 from mom_bot.reminders.scheduler import ReminderScheduler
@@ -233,8 +235,15 @@ SiegeWebClient` instance registered via :func:`make_client`; stored so
             with factory() as session:
                 _maybe_seed_reminders(session, self)
 
+            # Register member-notification slash commands now that the
+            # session factory is available (§ 2.5).
+            mn_service = MemberNotificationService(session_factory=factory)
+            _register_member_notifications(tree=self.tree, service=mn_service)
+
             # Run the scheduler loop for the bot's lifetime (plan § 6).
-            scheduler = ReminderScheduler(self, factory)
+            guild_id = int(load_secret("guild-id"))
+            live_guild = self.get_guild(guild_id)
+            scheduler = ReminderScheduler(self, factory, guild=live_guild)
             _logger.info("Reminder scheduler started")
             await scheduler.run()
         except asyncio.CancelledError:

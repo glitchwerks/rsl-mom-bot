@@ -59,6 +59,7 @@ import datetime
 import logging
 from collections.abc import Callable
 from pathlib import Path
+from typing import Any
 
 import aiohttp
 import discord
@@ -66,12 +67,16 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 import mom_bot.health as health
+from mom_bot.member_notifications.service import MemberNotificationService
 from mom_bot.reminders.calendar import (
     is_end_of_tank_date,
     is_tank_week_headsup_date,
 )
 from mom_bot.reminders.models import Reminder, ReminderSent  # noqa: F401
-from mom_bot.reminders.sent_store import ReminderSentStore
+from mom_bot.reminders.sent_store import (
+    MemberNotificationSentStore,
+    ReminderSentStore,
+)
 
 __all__ = ["ReminderScheduler"]
 
@@ -86,6 +91,9 @@ class ReminderScheduler:
     Attributes:
         _bot: The discord.py client (or a test double implementing
             ``is_ready()`` and ``get_channel()``).
+        _guild: Optional guild reference used to resolve members for DM
+            delivery.  ``None`` when the scheduler is used in channel-only
+            mode (e.g. the 23 pre-existing channel tests).
         _session_factory: A zero-argument callable that returns a new
             :class:`~sqlalchemy.orm.Session` bound to the bot database.
         _tick_seconds: Seconds to sleep between ticks.  Defaults to 60.0
@@ -97,6 +105,7 @@ class ReminderScheduler:
         bot: discord.Client,
         session_factory: Callable[[], Session],
         tick_seconds: float = 60.0,
+        guild: Any = None,
     ) -> None:
         """Initialise the scheduler.
 
@@ -108,8 +117,13 @@ class ReminderScheduler:
                 a :class:`~sqlalchemy.orm.sessionmaker` instance.
             tick_seconds: Seconds to sleep between scheduler ticks.
                 Default 60.0; inject a smaller value in tests.
+            guild: Optional :class:`discord.Guild` (or test double)
+                implementing ``get_member(int)`` and
+                ``fetch_member(int)`` for DM delivery.  When ``None``,
+                the DM branch is skipped silently (channel-only mode).
         """
         self._bot = bot
+        self._guild = guild
         self._session_factory = session_factory
         self._tick_seconds = tick_seconds
 
@@ -288,6 +302,18 @@ class ReminderScheduler:
             for reminder in survivors:
                 await self._handle_reminder(reminder, today_date, session)
 
+        # Step 5 — DM branch: process per-member notifications.  Runs AFTER
+        # the channel loop (spec § 2.3 finding 8) in a fresh session.
+        # The guild reference is required for member resolution; if absent
+        # (channel-only mode), skip this branch silently.
+        if self._guild is not None:
+            dm_service = MemberNotificationService(self._session_factory)
+            due_notifications = dm_service.list_due(today_date, now_time)
+            # Each notification needs its own fresh session for the
+            # insert-first idempotency claim.
+            for notif in due_notifications:
+                await self._handle_member_notification(notif, today_date)
+
     async def _handle_reminder(
         self,
         reminder: Reminder,
@@ -403,3 +429,140 @@ class ReminderScheduler:
                 today_date,
                 exc,
             )
+
+    async def _handle_member_notification(
+        self,
+        notif: Any,
+        today_date: datetime.date,
+    ) -> None:
+        """Attempt to fire one per-member DM notification: INSERT then send.
+
+        Follows the same insert-first, send-second, drop-on-failure pattern
+        as :meth:`_handle_reminder` (spec § 2.3).
+
+        Order (spec § 2.3 finding 6 — INSERT-first is mandatory):
+
+        1. INSERT the idempotency row to claim the occurrence slot.
+        2. Resolve the member by ``target_discord_id`` via
+           ``guild.get_member`` (cache) or ``guild.fetch_member`` (miss).
+        3. Send the DM via ``member.send(message_template)``.
+
+        Error taxonomy (spec § 2.3 finding 7):
+
+        - ``discord.Forbidden`` → permanent drop (row stays), DMs closed.
+        - ``discord.NotFound`` (from resolution or send) → permanent drop.
+        - ``discord.RateLimited`` / ``discord.HTTPException`` status >= 500 /
+          ``aiohttp.ClientError`` / ``asyncio.TimeoutError`` → transient:
+          ``unmark`` the row and re-raise so the next tick retries.
+        - Other ``HTTPException`` (4xx) or unexpected ``Exception`` →
+          permanent drop (row stays), logged.
+
+        Args:
+            notif: The :class:`~mom_bot.member_notifications.models.\
+MemberNotification` row to fire.
+            today_date: The UTC calendar date for this occurrence.
+        """
+        with self._session_factory() as session:
+            store = MemberNotificationSentStore(session)
+
+            # Step 1 — INSERT the idempotency row first (insert-first ordering
+            # — spec § 2.3 finding 6).  This MUST happen before member
+            # resolution so that a departed member does not cause an infinite
+            # per-tick loop (NotFound without a sent row → re-selected every
+            # tick on the same calendar day).
+            inserted = store.mark_sent(notif.id, today_date)
+            if not inserted:
+                # UNIQUE collision — already fired this occurrence.
+                _logger.debug(
+                    "scheduler: DM UNIQUE collision for notification %r " "on %s; skipping",
+                    notif.name,
+                    today_date,
+                )
+                return
+
+            # Step 2 — resolve the target member by discord_id.
+            discord_id = int(notif.target_discord_id)
+            member = self._guild.get_member(discord_id)
+            if member is None:
+                try:
+                    member = await self._guild.fetch_member(discord_id)
+                except discord.NotFound:
+                    # Member has left the guild — permanent drop, row stays.
+                    _logger.error(
+                        "scheduler: DM NotFound (member left) for "
+                        "notification %r on %s — dropping (row stays)",
+                        notif.name,
+                        today_date,
+                    )
+                    return
+                except discord.Forbidden as exc:
+                    # Should not happen at fetch time, but handle defensively.
+                    _logger.error(
+                        "scheduler: DM Forbidden during fetch_member for "
+                        "notification %r on %s: %s — dropping (row stays)",
+                        notif.name,
+                        today_date,
+                        exc,
+                    )
+                    return
+
+            # Step 3 — send the DM.
+            try:
+                await member.send(notif.message_template)
+                _logger.info(
+                    "scheduler: DM sent for notification %r to member %s " "on %s",
+                    notif.name,
+                    notif.target_discord_id,
+                    today_date,
+                )
+            except (discord.Forbidden, discord.NotFound) as exc:
+                # Permanent failure — row stays, no retry.
+                _logger.error(
+                    "scheduler: permanent DM error for notification %r "
+                    "on %s: %s — dropping (row stays)",
+                    notif.name,
+                    today_date,
+                    exc,
+                )
+            except (TimeoutError, discord.RateLimited, aiohttp.ClientError) as exc:
+                # Transient failure — delete row so next tick retries.
+                store.unmark(notif.id, today_date)
+                _logger.error(
+                    "scheduler: transient DM error for notification %r "
+                    "on %s: %s — row deleted for retry",
+                    notif.name,
+                    today_date,
+                    exc,
+                )
+                raise
+            except discord.HTTPException as exc:
+                if exc.status >= 500:
+                    # Transient server-side error.
+                    store.unmark(notif.id, today_date)
+                    _logger.error(
+                        "scheduler: DM HTTPException status=%d for "
+                        "notification %r on %s — row deleted for retry: %s",
+                        exc.status,
+                        notif.name,
+                        today_date,
+                        exc,
+                    )
+                    raise
+                # Other 4xx — permanent drop.
+                _logger.error(
+                    "scheduler: DM HTTPException status=%d for "
+                    "notification %r on %s: %s — dropping (row stays)",
+                    exc.status,
+                    notif.name,
+                    today_date,
+                    exc,
+                )
+            except Exception as exc:
+                # Unknown — log CRITICAL, leave row, no retry.
+                _logger.critical(
+                    "scheduler: unexpected DM error for notification %r "
+                    "on %s: %s — dropping (row stays)",
+                    notif.name,
+                    today_date,
+                    exc,
+                )

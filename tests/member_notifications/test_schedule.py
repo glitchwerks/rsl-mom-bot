@@ -14,6 +14,7 @@ from __future__ import annotations
 import datetime
 
 import pytest
+
 from mom_bot.member_notifications.schedule import (
     clamped_anchor_day,
     is_occurrence_date,
@@ -424,7 +425,7 @@ class TestMonthlyDay30:
 
     def test_fires_on_february_28_non_leap(self) -> None:
         """Day-30 anchor clamps to Feb 28 in non-leap year."""
-        assert is_occurrence_date(self._ANCHOR_MAR30, "monthly", datetime.date(2028, 2, 28))
+        assert is_occurrence_date(self._ANCHOR_MAR30, "monthly", datetime.date(2029, 2, 28))
 
     def test_fires_on_february_29_leap(self) -> None:
         """Day-30 anchor clamps to Feb 29 in a leap year."""
@@ -453,8 +454,8 @@ class TestMonthlyDay29:
             assert is_occurrence_date(self._ANCHOR_MAY29, "monthly", candidate)
 
     def test_fires_on_february_28_non_leap_2027(self) -> None:
-        """Day-29 clamps to Feb 28 in non-leap 2027."""
-        assert is_occurrence_date(self._ANCHOR_MAY29, "monthly", datetime.date(2028, 2, 28))
+        """Day-29 clamps to Feb 28 in non-leap year (2029)."""
+        assert is_occurrence_date(self._ANCHOR_MAY29, "monthly", datetime.date(2029, 2, 28))
 
     def test_fires_on_february_29_leap_2028(self) -> None:
         """Day-29 stays as Feb 29 in leap year 2028."""
