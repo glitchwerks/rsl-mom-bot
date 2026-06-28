@@ -10,6 +10,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 <!-- Add a "### 📣 Highlights" sub-section here before cutting the next release.
      See RELEASING.md § "Discord Highlights convention" for what to write there. -->
 
+## [1.2.0] - 2026-06-28
+
+### 📣 Highlights
+
+v1.2.0 brings two new automation features for officers and the whole clan:
+
+- **Tank Week reminders** — the bot now posts a heads-up notice the Tuesday before Tank Week starts, and replaces the normal Hydra reminder with a "final hours" Tank Week message on the ending Tuesday. No more manual pings.
+- **Per-member DM notifications** — officers can now schedule recurring direct-message reminders for any individual member using five new slash commands: `/member-notify-add`, `/member-notify-list`, `/member-notify-get`, `/member-notify-update`, and `/member-notify-remove`. Cadence options are weekly, biweekly, or monthly.
+
+Both features are live on next deploy.
+
+### Added
+
+- **Tank Week channel reminders** — calendar-conditional reminder rows for Hydra clash: a heads-up notice fires the Tuesday before Tank Week begins, and a Tank Week end-of-clash reminder replaces the standard Hydra reminder for that occurrence. "Tank Week" is defined as the Hydra clash whose ending Tuesday is the first Tuesday of the month (#268, #276).
+- **Per-member notification slash commands** — five officer-gated Discord slash commands for managing recurring DM notifications to a targeted guild member: `/member-notify-add`, `/member-notify-list`, `/member-notify-get`, `/member-notify-update`, `/member-notify-remove`. Schedule is defined by anchor date + cadence (weekly / biweekly / monthly); monthly cadence clamps to last day of month and skips to next occurrence rather than catching up. Uses Discord's native `Member` picker and a cadence dropdown. All commands require **Manage Server** permission — the codebase's first runtime authorization gate (#269, #277).
+
+### Infrastructure
+
+- **Release CI: Discord announcement moved inline** — the Discord release notification is now posted directly inside `release.yml` as a final `notify` job. `notify-discord-release.yml` is now a `workflow_dispatch`-only manual remediation tool for re-posting a failed announcement; it no longer fires automatically (#275).
+- **New DB columns on `reminders`** — `delivery_target` (NOT NULL, default `'channel'`) and `month_condition` (nullable, CHECK-constrained to `tank_week_headsup` / `tank_week_end`) added via migrations 0004/0005 (#268).
+- **New DB tables for per-member notifications** — `member_notification` and `member_notification_sent` tables created via migration `b3`; the reminder scheduler gained a DM-delivery branch to route these notifications (#269).
+
 ## [1.1.0] - 2026-06-27
 
 ### 📣 Highlights
