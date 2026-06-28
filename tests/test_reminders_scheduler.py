@@ -1031,3 +1031,819 @@ async def test_utc_midnight_date_attribution(
 
     assert len(sent_rows) == 1
     assert sent_rows[0].fire_date_utc == expected_fire_date
+
+
+# ===========================================================================
+# Phase B — DM-branch integration tests (#269 per-member notifications)
+# ===========================================================================
+#
+# New test doubles needed for the DM branch (FakeGuild / FakeMember did not
+# exist in the channel-only scheduler).  These extend the file-level harness
+# rather than replacing it.
+# ===========================================================================
+
+
+class FakeMember:
+    """Minimal stand-in for discord.Member with a DM send coroutine.
+
+    Args:
+        discord_id: The member's snowflake integer, mirrors member.id.
+    """
+
+    def __init__(self, discord_id: int) -> None:
+        """Initialise with a snowflake id and a fresh AsyncMock send."""
+        self.id = discord_id
+        self.send = AsyncMock()
+
+
+class FakeGuild:
+    """Minimal stand-in for discord.Guild.
+
+    Supports get_member() (cache hit) and fetch_member() (async, may raise).
+    """
+
+    def __init__(self) -> None:
+        """Initialise with an empty member registry."""
+        self._members: dict[int, FakeMember] = {}
+        self._fetch_side_effects: dict[int, Exception | None] = {}
+
+    def add_member(self, member: FakeMember) -> None:
+        """Register a fake member so get_member() can find it.
+
+        Args:
+            member: The FakeMember to register.
+        """
+        self._members[member.id] = member
+
+    def set_fetch_side_effect(self, discord_id: int, exc: Exception) -> None:
+        """Configure fetch_member() to raise exc for a specific id.
+
+        Args:
+            discord_id: The snowflake whose fetch should fail.
+            exc: The exception to raise.
+        """
+        self._fetch_side_effects[discord_id] = exc
+
+    def get_member(self, discord_id: int) -> FakeMember | None:
+        """Return a registered member or None (cache miss).
+
+        Args:
+            discord_id: The snowflake to look up.
+        """
+        return self._members.get(discord_id)
+
+    async def fetch_member(self, discord_id: int) -> FakeMember:
+        """Async fetch; raises configured side effect or returns member.
+
+        Args:
+            discord_id: The snowflake to fetch.
+
+        Raises:
+            discord.NotFound: If configured as a side effect.
+            discord.Forbidden: If configured as a side effect.
+        """
+        exc = self._fetch_side_effects.get(discord_id)
+        if exc is not None:
+            raise exc
+        member = self._members.get(discord_id)
+        if member is None:
+            raise discord.NotFound(MagicMock(status=404, reason="Unknown Member"), "test")
+        return member
+
+
+# ---------------------------------------------------------------------------
+# DM-branch fixtures
+# ---------------------------------------------------------------------------
+
+_MEMBER_DISCORD_ID = 555444333222111000
+_NOTIFICATION_ANCHOR = datetime.date(2026, 5, 5)  # Tuesday — same as _TUESDAY_0700
+
+# Weekly anchor — fires every Tuesday; _TUESDAY_0700 is a Tuesday.
+_MEMBER_FIRE_TIME = datetime.time(7, 0, 0)
+
+
+def _make_scheduler_with_guild(
+    bot: FakeBot,
+    guild: FakeGuild,
+    engine: Any,
+    tick_seconds: float = 0.05,
+) -> ReminderScheduler:
+    """Factory for a ReminderScheduler that includes a guild reference.
+
+    Args:
+        bot: The FakeBot driving readiness.
+        guild: The FakeGuild for member resolution.
+        engine: The SQLAlchemy engine (in-memory SQLite).
+        tick_seconds: Tick interval; fast in tests.
+
+    Returns:
+        A ReminderScheduler configured with guild for DM dispatch.
+    """
+    return ReminderScheduler(
+        bot=bot,  # type: ignore[arg-type]
+        guild=guild,  # type: ignore[arg-type]
+        session_factory=_make_session_factory(engine),
+        tick_seconds=tick_seconds,
+    )
+
+
+def _seed_member_notification(
+    session: Session,
+    *,
+    name: str = "dm-test",
+    target_discord_id: int = _MEMBER_DISCORD_ID,
+    anchor_date_utc: datetime.date = _NOTIFICATION_ANCHOR,
+    fire_time_utc: datetime.time = _MEMBER_FIRE_TIME,
+    cadence: str = "weekly",
+    message_template: str = "Hello from the bot!",
+    enabled: bool = True,
+) -> Any:
+    """Insert a MemberNotification row and return it.
+
+    Args:
+        session: SQLAlchemy session to use for the insert.
+        name: Human-readable label (UNIQUE key).
+        target_discord_id: The DM recipient's Discord snowflake (stored TEXT).
+        anchor_date_utc: First occurrence date.
+        fire_time_utc: Time-of-day gate (minute boundary).
+        cadence: One of weekly, biweekly, monthly.
+        message_template: The static message body.
+        enabled: Whether the notification is active.
+
+    Returns:
+        The inserted MemberNotification ORM row.
+    """
+    from mom_bot.member_notifications.models import MemberNotification
+
+    row = MemberNotification(
+        name=name,
+        target_discord_id=str(target_discord_id),
+        anchor_date_utc=anchor_date_utc,
+        fire_time_utc=fire_time_utc,
+        cadence=cadence,
+        message_template=message_template,
+        enabled=enabled,
+    )
+    session.add(row)
+    session.commit()
+    session.refresh(row)
+    return row
+
+
+def _make_engine_with_member_notifications() -> Any:
+    """Create an in-memory SQLite engine with ALL tables (reminders + DM).
+
+    Returns:
+        A SQLAlchemy engine with Base.metadata.create_all applied, which
+        includes both the existing reminder tables and the new
+        member_notification / member_notification_sent tables.
+    """
+    engine = create_engine(
+        "sqlite:///:memory:",
+        echo=False,
+        connect_args={"check_same_thread": False},
+    )
+    # Force import of MemberNotification models so they register with Base.
+    import mom_bot.member_notifications.models  # noqa: F401
+
+    Base.metadata.create_all(engine)
+    return engine
+
+
+# ---------------------------------------------------------------------------
+# DM-branch happy path
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_dm_branch_fires_on_occurrence_date() -> None:
+    """Enabled member_notification sends DM via member.send() on anchor date.
+
+    Resolves the target member by target_discord_id (not username).
+    """
+    engine = _make_engine_with_member_notifications()
+    member = FakeMember(_MEMBER_DISCORD_ID)
+    guild = FakeGuild()
+    guild.add_member(member)
+
+    with Session(engine) as s:
+        _seed_member_notification(
+            s,
+            target_discord_id=_MEMBER_DISCORD_ID,
+            anchor_date_utc=_NOTIFICATION_ANCHOR,
+            fire_time_utc=_MEMBER_FIRE_TIME,
+        )
+
+    bot = FakeBot(ready=True)
+    scheduler = _make_scheduler_with_guild(bot, guild, engine)
+
+    with time_machine.travel(_TUESDAY_0700, tick=False):
+        task = asyncio.create_task(scheduler.run())
+        await asyncio.sleep(0.12)
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+
+    member.send.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_dm_branch_resolves_by_discord_id_not_username() -> None:
+    """DM branch uses target_discord_id for member resolution (§ 2.3).
+
+    Two members in the guild: only the one whose id matches fires.
+    """
+    engine = _make_engine_with_member_notifications()
+    target = FakeMember(_MEMBER_DISCORD_ID)
+    other = FakeMember(9876543210)
+    guild = FakeGuild()
+    guild.add_member(target)
+    guild.add_member(other)
+
+    with Session(engine) as s:
+        _seed_member_notification(
+            s,
+            target_discord_id=_MEMBER_DISCORD_ID,
+            anchor_date_utc=_NOTIFICATION_ANCHOR,
+            fire_time_utc=_MEMBER_FIRE_TIME,
+        )
+
+    bot = FakeBot(ready=True)
+    scheduler = _make_scheduler_with_guild(bot, guild, engine)
+
+    with time_machine.travel(_TUESDAY_0700, tick=False):
+        task = asyncio.create_task(scheduler.run())
+        await asyncio.sleep(0.12)
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+
+    target.send.assert_called_once()
+    other.send.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# Skip-to-next, NOT catch-up
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_delayed_same_day_tick_fires() -> None:
+    """A tick delayed past fire_time on the occurrence date still fires.
+
+    Simulates a brief scheduler outage that recovers later the same day.
+    The occurrence date predicate still matches (today is still the anchor
+    date), and now_time >= fire_time_utc, so the notification fires.
+    """
+    engine = _make_engine_with_member_notifications()
+    member = FakeMember(_MEMBER_DISCORD_ID)
+    guild = FakeGuild()
+    guild.add_member(member)
+
+    # fire_time = 07:00; we tick at 09:00 (two hours late, same day).
+    delayed_tick = datetime.datetime(2026, 5, 5, 9, 0, 0, tzinfo=datetime.UTC)
+
+    with Session(engine) as s:
+        _seed_member_notification(
+            s,
+            anchor_date_utc=_NOTIFICATION_ANCHOR,
+            fire_time_utc=_MEMBER_FIRE_TIME,  # 07:00
+        )
+
+    bot = FakeBot(ready=True)
+    scheduler = _make_scheduler_with_guild(bot, guild, engine)
+
+    with time_machine.travel(delayed_tick, tick=False):
+        task = asyncio.create_task(scheduler.run())
+        await asyncio.sleep(0.12)
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+
+    member.send.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_past_occurrence_does_not_fire_late() -> None:
+    """Day after a missed occurrence: no DM, no member_notification_sent row.
+
+    Verifies skip-to-next semantics: once the occurrence date has passed,
+    the notification is silently dropped — no backlog, no late fire.
+    The NEXT genuine occurrence (7 days later for weekly) fires normally.
+    """
+    engine = _make_engine_with_member_notifications()
+    member = FakeMember(_MEMBER_DISCORD_ID)
+    guild = FakeGuild()
+    guild.add_member(member)
+
+    # anchor = 2026-05-05 (Tuesday); cadence = weekly.
+    # Tick at 2026-05-06 (Wednesday) — not an occurrence date.
+    day_after_missed = datetime.datetime(2026, 5, 6, 7, 0, 0, tzinfo=datetime.UTC)
+
+    with Session(engine) as s:
+        _seed_member_notification(
+            s,
+            anchor_date_utc=_NOTIFICATION_ANCHOR,
+            fire_time_utc=_MEMBER_FIRE_TIME,
+        )
+
+    bot = FakeBot(ready=True)
+    scheduler = _make_scheduler_with_guild(bot, guild, engine)
+
+    with time_machine.travel(day_after_missed, tick=False):
+        task = asyncio.create_task(scheduler.run())
+        await asyncio.sleep(0.12)
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+
+    member.send.assert_not_called()
+
+    from mom_bot.member_notifications.models import MemberNotificationSent
+
+    with Session(engine) as s:
+        assert s.query(MemberNotificationSent).count() == 0
+
+    # Next genuine occurrence (7 days after anchor) DOES fire.
+    next_occurrence = datetime.datetime(2026, 5, 12, 7, 0, 0, tzinfo=datetime.UTC)
+    with time_machine.travel(next_occurrence, tick=False):
+        task2 = asyncio.create_task(scheduler.run())
+        await asyncio.sleep(0.12)
+        task2.cancel()
+        try:
+            await task2
+        except asyncio.CancelledError:
+            pass
+
+    member.send.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# enabled=false never fires
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_disabled_notification_never_fires() -> None:
+    """A member_notification with enabled=False is never sent."""
+    engine = _make_engine_with_member_notifications()
+    member = FakeMember(_MEMBER_DISCORD_ID)
+    guild = FakeGuild()
+    guild.add_member(member)
+
+    with Session(engine) as s:
+        _seed_member_notification(
+            s,
+            anchor_date_utc=_NOTIFICATION_ANCHOR,
+            fire_time_utc=_MEMBER_FIRE_TIME,
+            enabled=False,
+        )
+
+    bot = FakeBot(ready=True)
+    scheduler = _make_scheduler_with_guild(bot, guild, engine)
+
+    with time_machine.travel(_TUESDAY_0700, tick=False):
+        task = asyncio.create_task(scheduler.run())
+        await asyncio.sleep(0.12)
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+
+    member.send.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# Per-occurrence idempotency
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_dm_branch_idempotency_second_tick_no_resend() -> None:
+    """Second tick on the same occurrence date does not re-send the DM.
+
+    The UNIQUE(member_notification_id, occurrence_date_utc) constraint
+    blocks re-insertion, so member.send() is called exactly once even
+    across multiple ticks within the same calendar day.
+    """
+    engine = _make_engine_with_member_notifications()
+    member = FakeMember(_MEMBER_DISCORD_ID)
+    guild = FakeGuild()
+    guild.add_member(member)
+
+    with Session(engine) as s:
+        _seed_member_notification(
+            s,
+            anchor_date_utc=_NOTIFICATION_ANCHOR,
+            fire_time_utc=_MEMBER_FIRE_TIME,
+        )
+
+    bot = FakeBot(ready=True)
+    scheduler = _make_scheduler_with_guild(bot, guild, engine, tick_seconds=0.05)
+
+    # Two full ticks at the same occurrence time.
+    with time_machine.travel(_TUESDAY_0700, tick=False):
+        task = asyncio.create_task(scheduler.run())
+        await asyncio.sleep(0.15)  # ~3 ticks
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+
+    assert member.send.call_count == 1
+
+
+# ---------------------------------------------------------------------------
+# Error taxonomy (mirroring channel branch)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_dm_forbidden_row_stays_no_retry() -> None:
+    """Forbidden DMs (DMs closed) → row stays, no retry on second tick."""
+    engine = _make_engine_with_member_notifications()
+    member = FakeMember(_MEMBER_DISCORD_ID)
+    member.send.side_effect = discord.Forbidden(
+        MagicMock(status=403, reason="Cannot send messages to this user"), "test"
+    )
+    guild = FakeGuild()
+    guild.add_member(member)
+
+    with Session(engine) as s:
+        _seed_member_notification(
+            s,
+            anchor_date_utc=_NOTIFICATION_ANCHOR,
+            fire_time_utc=_MEMBER_FIRE_TIME,
+        )
+
+    bot = FakeBot(ready=True)
+    scheduler = _make_scheduler_with_guild(bot, guild, engine)
+
+    with time_machine.travel(_TUESDAY_0700, tick=False):
+        task = asyncio.create_task(scheduler.run())
+        await asyncio.sleep(0.12)
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+
+    # send attempted once; UNIQUE row still present (permanent drop).
+    assert member.send.call_count == 1
+    from mom_bot.member_notifications.models import MemberNotificationSent
+
+    with Session(engine) as s:
+        assert s.query(MemberNotificationSent).count() == 1
+
+
+@pytest.mark.asyncio
+async def test_dm_not_found_row_stays_no_retry() -> None:
+    """Member left the guild (NotFound) → permanent drop, row stays."""
+    engine = _make_engine_with_member_notifications()
+    guild = FakeGuild()
+
+    with Session(engine) as s:
+        notif = _seed_member_notification(
+            s,
+            target_discord_id=_MEMBER_DISCORD_ID,
+            anchor_date_utc=_NOTIFICATION_ANCHOR,
+            fire_time_utc=_MEMBER_FIRE_TIME,
+        )
+        _ = notif  # id used only for assertion
+
+    # Member NOT in guild — get_member returns None and fetch raises NotFound.
+    guild.set_fetch_side_effect(
+        _MEMBER_DISCORD_ID,
+        discord.NotFound(MagicMock(status=404, reason="Unknown Member"), "test"),
+    )
+
+    bot = FakeBot(ready=True)
+    scheduler = _make_scheduler_with_guild(bot, guild, engine)
+
+    with time_machine.travel(_TUESDAY_0700, tick=False):
+        task = asyncio.create_task(scheduler.run())
+        await asyncio.sleep(0.12)
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+
+    from mom_bot.member_notifications.models import MemberNotificationSent
+
+    # Sent row must exist (insert-first ordering — the slot was claimed).
+    with Session(engine) as s:
+        assert s.query(MemberNotificationSent).count() == 1
+
+
+@pytest.mark.asyncio
+async def test_dm_5xx_row_deleted_retried_next_tick() -> None:
+    """HTTPException status>=500 on DM → row deleted, retry on next tick."""
+    engine = _make_engine_with_member_notifications()
+    member = FakeMember(_MEMBER_DISCORD_ID)
+    member.send.side_effect = [
+        discord.HTTPException(MagicMock(status=503, reason="Service Unavailable"), "test"),
+        None,  # second tick succeeds
+    ]
+    guild = FakeGuild()
+    guild.add_member(member)
+
+    with Session(engine) as s:
+        _seed_member_notification(
+            s,
+            anchor_date_utc=_NOTIFICATION_ANCHOR,
+            fire_time_utc=_MEMBER_FIRE_TIME,
+        )
+
+    bot = FakeBot(ready=True)
+    scheduler = _make_scheduler_with_guild(bot, guild, engine, tick_seconds=0.05)
+
+    with time_machine.travel(_TUESDAY_0700, tick=False):
+        task = asyncio.create_task(scheduler.run())
+        # Wait until exactly two send attempts have occurred.
+        deadline = asyncio.get_event_loop().time() + 5.0
+        while member.send.call_count < 2:
+            if asyncio.get_event_loop().time() >= deadline:
+                raise AssertionError("Timed out waiting for 2 DM send attempts")
+            await asyncio.sleep(0.005)
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+
+    assert member.send.call_count == 2
+    from mom_bot.member_notifications.models import MemberNotificationSent
+
+    with Session(engine) as s:
+        assert s.query(MemberNotificationSent).count() == 1
+
+
+# ---------------------------------------------------------------------------
+# Insert-first ordering (finding 6)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_insert_first_departed_member_consumes_daily_slot() -> None:
+    """NotFound for departed member still leaves a sent row (insert-first).
+
+    Spec § 2.3 finding 6: the idempotency row is inserted BEFORE member
+    resolution.  This test verifies that a NotFound on resolution still
+    results in a member_notification_sent row, so the notification cannot
+    loop on subsequent ticks within the same day.
+    """
+    engine = _make_engine_with_member_notifications()
+    guild = FakeGuild()
+    guild.set_fetch_side_effect(
+        _MEMBER_DISCORD_ID,
+        discord.NotFound(MagicMock(status=404, reason="Unknown Member"), "test"),
+    )
+
+    with Session(engine) as s:
+        _seed_member_notification(
+            s,
+            target_discord_id=_MEMBER_DISCORD_ID,
+            anchor_date_utc=_NOTIFICATION_ANCHOR,
+            fire_time_utc=_MEMBER_FIRE_TIME,
+        )
+
+    bot = FakeBot(ready=True)
+    scheduler = _make_scheduler_with_guild(bot, guild, engine)
+
+    with time_machine.travel(_TUESDAY_0700, tick=False):
+        task = asyncio.create_task(scheduler.run())
+        await asyncio.sleep(0.12)
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+
+    from mom_bot.member_notifications.models import MemberNotificationSent
+
+    with Session(engine) as s:
+        count = s.query(MemberNotificationSent).count()
+
+    assert count == 1, (
+        "Expected a member_notification_sent row even after NotFound — "
+        "insert-first ordering guarantees the slot is consumed before "
+        "member resolution so the notification does not loop."
+    )
+
+
+# ---------------------------------------------------------------------------
+# Regression test — P2: transient fetch_member failure unmarks row for retry
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_fetch_member_5xx_row_deleted_retried_next_tick() -> None:
+    """fetch_member 5xx HTTPException → row deleted, retry on next tick.
+
+    Regression for PR #277 finding P2: a transient HTTPException (status
+    >= 500) raised by ``guild.fetch_member`` after ``mark_sent()`` committed
+    the idempotency row was previously left unhandled.  The outer per-tick
+    ``except`` suppressed it, leaving the row in place and silently dropping
+    the occurrence for the calendar day.
+
+    Fix: treat transient ``fetch_member`` failures the same as transient
+    ``member.send()`` failures (spec § 2.3 finding 7) — ``unmark()`` the
+    row and re-raise so the next tick retries.
+
+    This test mirrors ``test_dm_5xx_row_deleted_retried_next_tick`` but
+    places the 5xx on the ``fetch_member`` step (cache-miss path) rather
+    than on ``member.send``.
+    """
+    engine = _make_engine_with_member_notifications()
+
+    # Do NOT add the member to the guild cache so fetch_member is called.
+    guild = FakeGuild()
+    guild.set_fetch_side_effect(
+        _MEMBER_DISCORD_ID,
+        discord.HTTPException(MagicMock(status=503, reason="Service Unavailable"), "test"),
+    )
+
+    with Session(engine) as s:
+        _seed_member_notification(
+            s,
+            anchor_date_utc=_NOTIFICATION_ANCHOR,
+            fire_time_utc=_MEMBER_FIRE_TIME,
+        )
+
+    bot = FakeBot(ready=True)
+    scheduler = _make_scheduler_with_guild(bot, guild, engine, tick_seconds=0.05)
+
+    # Run one tick — fetch_member raises 503.  The row must be deleted so
+    # the next tick can retry.
+    with time_machine.travel(_TUESDAY_0700, tick=False):
+        task = asyncio.create_task(scheduler.run())
+        # Wait long enough for at least one tick to complete.
+        await asyncio.sleep(0.12)
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+
+    from mom_bot.member_notifications.models import MemberNotificationSent
+
+    with Session(engine) as s:
+        count = s.query(MemberNotificationSent).count()
+
+    assert count == 0, (
+        "Expected the member_notification_sent row to be deleted after a "
+        "transient fetch_member 5xx so the next tick can retry.  "
+        f"Got {count} row(s) — the occurrence was silently dropped."
+    )
+
+
+# ---------------------------------------------------------------------------
+# Regression guard — existing channel reminders unaffected
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_existing_channel_reminders_unaffected_by_dm_branch() -> None:
+    """A channel Reminder still fires when a MemberNotification is also due.
+
+    The DM branch must not interfere with or suppress the channel loop.
+    """
+    engine = _make_engine_with_member_notifications()
+    member = FakeMember(_MEMBER_DISCORD_ID)
+    guild = FakeGuild()
+    guild.add_member(member)
+
+    channel = FakeChannel(_CHANNEL_ID)
+
+    with Session(engine) as s:
+        _seed_reminder(s, weekday=_TUESDAY_0700.weekday())
+        _seed_member_notification(
+            s,
+            anchor_date_utc=_NOTIFICATION_ANCHOR,
+            fire_time_utc=_MEMBER_FIRE_TIME,
+        )
+
+    bot = FakeBot(ready=True)
+    bot.add_channel(channel)
+    scheduler = _make_scheduler_with_guild(bot, guild, engine)
+
+    with time_machine.travel(_TUESDAY_0700, tick=False):
+        task = asyncio.create_task(scheduler.run())
+        await asyncio.sleep(0.12)
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+
+    # Channel reminder still fires.
+    channel.send.assert_called_once()
+    # DM also fires.
+    member.send.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# Regression test — PR #277 finding 1: DM loop isolation
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_dm_loop_continues_after_first_notification_transient_error() -> None:
+    """A transient failure on the first notification does not abort the loop.
+
+    Regression for PR #277 finding 1: the DM loop previously let a
+    re-raised transient exception from ``_handle_member_notification``
+    propagate up through the ``for notif in due_notifications`` loop,
+    aborting the remainder of the tick.  A single member's repeated
+    transient failure could therefore delay or drop every other member's
+    independent DM for the same tick.
+
+    Fix: each ``_handle_member_notification`` call is now wrapped in
+    ``try/except Exception`` so a failure on notification N does not
+    prevent notification N+1 from firing.
+
+    Setup: two due notifications in the same tick.  The FIRST raises a
+    transient 5xx ``HTTPException`` (which also ``unmark()``s its row so
+    it is retried next tick).  The SECOND member's ``send`` must still be
+    called on THIS tick.
+    """
+    engine = _make_engine_with_member_notifications()
+
+    # First member — transient 5xx on send.
+    first_member_id = _MEMBER_DISCORD_ID
+    first_member = FakeMember(first_member_id)
+    first_member.send.side_effect = discord.HTTPException(
+        MagicMock(status=503, reason="Service Unavailable"), "test"
+    )
+
+    # Second member — different snowflake; send succeeds.
+    second_member_id = 777666555444333222
+    second_member = FakeMember(second_member_id)
+
+    guild = FakeGuild()
+    guild.add_member(first_member)
+    guild.add_member(second_member)
+
+    with Session(engine) as s:
+        _seed_member_notification(
+            s,
+            name="notif-first",
+            target_discord_id=first_member_id,
+            anchor_date_utc=_NOTIFICATION_ANCHOR,
+            fire_time_utc=_MEMBER_FIRE_TIME,
+        )
+        _seed_member_notification(
+            s,
+            name="notif-second",
+            target_discord_id=second_member_id,
+            anchor_date_utc=_NOTIFICATION_ANCHOR,
+            fire_time_utc=_MEMBER_FIRE_TIME,
+        )
+
+    bot = FakeBot(ready=True)
+    scheduler = _make_scheduler_with_guild(bot, guild, engine, tick_seconds=0.05)
+
+    with time_machine.travel(_TUESDAY_0700, tick=False):
+        task = asyncio.create_task(scheduler.run())
+        # Poll until the second member's send has fired (proving the loop
+        # continued past the first member's transient error).
+        deadline = asyncio.get_event_loop().time() + 5.0
+        while second_member.send.call_count < 1:
+            if asyncio.get_event_loop().time() >= deadline:
+                raise AssertionError(
+                    "Timed out waiting for second member's DM — the DM loop "
+                    "may have aborted after the first notification's transient "
+                    "error instead of continuing to the next notification."
+                )
+            await asyncio.sleep(0.005)
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+
+    # Primary assertion: the second member's DM fired this same tick.
+    second_member.send.assert_called_once()
+
+    # First member's row was unmarked after the transient 5xx, so it will
+    # be retried next tick.  Only the second notification's sent row remains.
+    from mom_bot.member_notifications.models import MemberNotificationSent
+
+    with Session(engine) as s:
+        count = s.query(MemberNotificationSent).count()
+    assert count == 1, (
+        f"Expected 1 sent row (second notification only); got {count}. "
+        "The first notification's row should have been deleted by unmark() "
+        "after the transient 5xx."
+    )

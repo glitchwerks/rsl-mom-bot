@@ -386,10 +386,16 @@ async def test_scheduler_fires_custom_reminder() -> None:
     # The scheduler calls bot.is_ready(); patch it to True.
     bot.is_ready = lambda: True  # type: ignore[method-assign]
 
+    mock_guild, _ = _make_fake_guild(_CHANNEL_ID, _CHANNEL_NAME)
+
     with (
         patch("mom_bot.main.load_secret", side_effect=fake_load_secret),
         patch.object(bot, "wait_until_ready", new_callable=AsyncMock),
         patch.object(bot.tree, "sync", new_callable=AsyncMock),
+        # Finding 3 (PR #277): get_guild must return a non-None guild or the
+        # scheduler raises RuntimeError.  Provide the fake guild so the
+        # channel-reminder path (this test's concern) can proceed.
+        patch.object(bot, "get_guild", return_value=mock_guild),
     ):
         with patch(
             "mom_bot.main._build_session_factory",
@@ -872,3 +878,224 @@ async def test_close_calls_runner_cleanup(
         await bot.close()
 
     runner_mock.cleanup.assert_awaited_once()
+
+
+# ---------------------------------------------------------------------------
+# Regression test — P1: member-notify commands registered before sync
+# ---------------------------------------------------------------------------
+
+
+_MEMBER_NOTIFY_COMMAND_NAMES = {
+    "member-notify-add",
+    "member-notify-list",
+    "member-notify-get",
+    "member-notify-update",
+    "member-notify-remove",
+}
+
+
+@pytest.mark.asyncio
+async def test_member_notify_commands_registered_before_sync(
+    mock_health_server: AsyncMock,
+) -> None:
+    """setup_hook() must register member-notify commands BEFORE tree.sync().
+
+    Regression for PR #277 finding P1: the five ``/member-notify-*`` commands
+    were previously registered in the post-READY background task — AFTER
+    ``tree.copy_global_to`` / ``tree.sync`` had already run.  Discord only
+    receives commands present on the tree AT sync time, so the commands were
+    invisible to officers on a fresh deploy.
+
+    This test drives ``setup_hook`` with a real ``CommandTree`` (not a
+    MagicMock) and a ``tree.sync`` mock that records which commands are
+    registered at the moment it is called.  The assertion verifies that all
+    five member-notify command names are present in the tree BEFORE sync is
+    awaited.
+    """
+    from mom_bot.main import MomBot, build_intents
+
+    load_secret_values = {
+        "guild-id": str(_GUILD_ID),
+        "reminder-channel-name": _CHANNEL_NAME,
+        "reminder-mention-role-name": _ROLE_NAME,
+    }
+
+    def fake_load_secret(name: str) -> str:
+        return load_secret_values[name]
+
+    bot = MomBot(intents=build_intents())
+
+    # Capture the command names present on the tree at the moment sync fires.
+    commands_at_sync_time: set[str] = set()
+
+    async def _capture_sync(**kwargs: object) -> None:
+        """Record tree command names at sync time."""
+        commands_at_sync_time.update(cmd.name for cmd in bot.tree.get_commands())
+
+    with (
+        patch("mom_bot.main.load_secret", side_effect=fake_load_secret),
+        patch.object(bot.tree, "sync", side_effect=_capture_sync),
+        patch(
+            "mom_bot.main._build_session_factory",
+            return_value=MagicMock(),
+        ),
+        patch(
+            "mom_bot.main._resolve_db_url",
+            return_value="sqlite:///:memory:",
+        ),
+    ):
+        await bot.setup_hook()
+
+    # All five member-notify commands must be present at sync time.
+    missing = _MEMBER_NOTIFY_COMMAND_NAMES - commands_at_sync_time
+    assert not missing, (
+        f"Commands {missing!r} were NOT present on the tree when "
+        "tree.sync() was called — they will be invisible to Discord on "
+        "a fresh deploy.  Register them in setup_hook BEFORE sync."
+    )
+
+    # Clean up background task.
+    if bot._reminder_task is not None:
+        bot._reminder_task.cancel()
+        try:
+            await bot._reminder_task
+        except asyncio.CancelledError:
+            pass
+
+
+# ---------------------------------------------------------------------------
+# Regression test — PR #277 finding 3: fail-fast on missing guild
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_missing_guild_after_ready_raises_runtime_error(
+    mock_health_server: AsyncMock,
+) -> None:
+    """RuntimeError raised (not silent None) when get_guild returns None.
+
+    Regression for PR #277 finding 3: ``self.get_guild(guild_id)`` can
+    return ``None`` after ``wait_until_ready()`` if the bot is not a member
+    of the configured guild or the snowflake is wrong.  Previously the code
+    silently passed ``guild=None`` to ``ReminderScheduler``, disabling the
+    DM branch for the whole process lifetime with no indication of failure.
+
+    Fix: if ``get_guild`` returns ``None``, the scheduler startup must log
+    CRITICAL and raise ``RuntimeError``.
+    """
+    from mom_bot.main import MomBot, build_intents
+
+    engine = _make_engine()
+    session_factory = _make_session_factory(engine)
+
+    load_secret_values = {
+        "guild-id": str(_GUILD_ID),
+        "reminder-channel-name": _CHANNEL_NAME,
+        "reminder-mention-role-name": _ROLE_NAME,
+    }
+
+    def fake_load_secret(name: str) -> str:
+        return load_secret_values[name]
+
+    bot = MomBot(intents=build_intents())
+
+    with (
+        patch("mom_bot.main.load_secret", side_effect=fake_load_secret),
+        patch("mom_bot.reminders.seed.load_secret", side_effect=fake_load_secret),
+        patch.object(bot, "wait_until_ready", new_callable=AsyncMock),
+        patch.object(bot.tree, "sync", new_callable=AsyncMock),
+        patch(
+            "mom_bot.main._build_session_factory",
+            return_value=session_factory,
+        ),
+        patch(
+            "mom_bot.main._resolve_db_url",
+            return_value="sqlite:///:memory:",
+        ),
+        # get_guild returns None — guild not found after READY.
+        patch.object(bot, "get_guild", return_value=None),
+        # Seed step needs a guild too; patch it separately so seed doesn't
+        # interfere with the guild-missing assertion.
+        patch("mom_bot.main._maybe_seed_reminders"),
+    ):
+        await bot.setup_hook()
+        # Yield control so the background task runs past wait_until_ready
+        # and into the get_guild check.
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+
+    assert bot._reminder_task is not None
+    # The task must have raised RuntimeError.
+    assert (
+        bot._reminder_task.done()
+    ), "Expected the reminder task to be done (raised) after guild not found"
+    exc = bot._reminder_task.exception()
+    assert isinstance(
+        exc, RuntimeError
+    ), f"Expected RuntimeError when get_guild returns None, got {type(exc).__name__}: {exc}"
+    assert str(_GUILD_ID) in str(
+        exc
+    ), f"RuntimeError message should include the guild ID; got: {exc}"
+
+
+# ---------------------------------------------------------------------------
+# Regression test — PR #277 finding 4: cadence choices on command tree entries
+# ---------------------------------------------------------------------------
+
+
+def test_cadence_choices_on_add_and_update_commands() -> None:
+    """member-notify-add and member-notify-update expose three cadence choices.
+
+    Regression for PR #277 finding 4: cadence must be a Discord UI dropdown
+    (``app_commands.Choice[str]``) rather than a free-text parameter, so
+    typos are eliminated at the Discord layer (spec § 2.5).
+
+    Asserts on the command objects registered in the tree — the same metadata
+    Discord reads at sync time — mirroring how
+    ``test_commands_have_default_permissions_manage_guild`` asserts
+    ``default_permissions``.
+    """
+    import discord
+    from discord.app_commands import CommandTree
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import sessionmaker
+
+    from mom_bot.db import Base
+    from mom_bot.member_notifications.commands import register
+    from mom_bot.member_notifications.service import MemberNotificationService
+
+    # Build a minimal tree + service for registration.
+    intents = discord.Intents.default()
+    client = discord.Client(intents=intents)
+    tree = CommandTree(client)
+
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    service = MemberNotificationService(session_factory=sessionmaker(bind=engine))
+
+    register(tree=tree, service=service)
+
+    _expected_values = {"weekly", "biweekly", "monthly"}
+    _expected_names = {"Weekly", "Biweekly", "Monthly"}
+
+    for cmd_name in ("member-notify-add", "member-notify-update"):
+        cmd = tree.get_command(cmd_name)
+        assert cmd is not None, f"Command {cmd_name!r} not found in tree"
+
+        cadence_param = next(
+            (p for p in cmd.parameters if p.name == "cadence"),
+            None,
+        )
+        assert cadence_param is not None, f"Command {cmd_name!r} has no 'cadence' parameter"
+
+        actual_values = {c.value for c in cadence_param.choices}
+        actual_names = {c.name for c in cadence_param.choices}
+
+        assert actual_values == _expected_values, (
+            f"{cmd_name}: expected cadence choice values "
+            f"{_expected_values!r}, got {actual_values!r}"
+        )
+        assert actual_names == _expected_names, (
+            f"{cmd_name}: expected cadence choice names "
+            f"{_expected_names!r}, got {actual_names!r}"
+        )

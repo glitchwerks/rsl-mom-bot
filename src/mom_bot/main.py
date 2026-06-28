@@ -46,6 +46,8 @@ from mom_bot import __version__
 from mom_bot.config import load_secret
 from mom_bot.db import build_session_factory as _build_session_factory
 from mom_bot.health import start_health_server
+from mom_bot.member_notifications.commands import register as _register_member_notifications
+from mom_bot.member_notifications.service import MemberNotificationService
 from mom_bot.post_conditions.client import SiegeWebClient
 from mom_bot.post_conditions.commands import register as _register_post_conditions
 from mom_bot.reminders.scheduler import ReminderScheduler
@@ -170,6 +172,15 @@ SiegeWebClient` instance registered via :func:`make_client`; stored so
 
         guild_id = int(load_secret("guild-id"))
         self.guild = discord.Object(id=guild_id)
+
+        # Register member-notify commands BEFORE sync so Discord receives
+        # the full command set on every deploy (fix for PR #277 finding P1).
+        # The session factory only needs the DB URL — no gateway connection
+        # required — so it is safe to build here in setup_hook.
+        _mn_factory = _build_session_factory(_resolve_db_url())
+        mn_service = MemberNotificationService(session_factory=_mn_factory)
+        _register_member_notifications(tree=self.tree, service=mn_service)
+
         self.tree.copy_global_to(guild=self.guild)
         await self.tree.sync(guild=self.guild)
         _logger.info("Synced slash commands to guild %s", guild_id)
@@ -234,7 +245,15 @@ SiegeWebClient` instance registered via :func:`make_client`; stored so
                 _maybe_seed_reminders(session, self)
 
             # Run the scheduler loop for the bot's lifetime (plan § 6).
-            scheduler = ReminderScheduler(self, factory)
+            guild_id = int(load_secret("guild-id"))
+            live_guild = self.get_guild(guild_id)
+            if live_guild is None:
+                _logger.critical(
+                    "Guild %d not found after bot READY — " "cannot start scheduler",
+                    guild_id,
+                )
+                raise RuntimeError(f"Guild {guild_id} not found after bot READY")
+            scheduler = ReminderScheduler(self, factory, guild=live_guild)
             _logger.info("Reminder scheduler started")
             await scheduler.run()
         except asyncio.CancelledError:
