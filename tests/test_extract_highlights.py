@@ -224,3 +224,128 @@ End-of-body summary with no following section.
 def test_highlights_at_end_of_body_extracted():
     out = run_script(BODY_HIGHLIGHTS_LAST)
     assert "End-of-body summary" in out
+
+
+# ---------------------------------------------------------------------------
+# 8. Empty Highlights section — emits fallback, no stray separator (issue #235)
+# ---------------------------------------------------------------------------
+BODY_EMPTY_HIGHLIGHTS = """\
+### 📣 Highlights
+
+## Fixed
+
+- Bug #789.
+"""
+
+
+def test_empty_highlights_section_returns_fallback():
+    """Empty Highlights section (no content between heading and next ##) →
+    fallback description, NOT a stray separator or blank output.
+    """
+    out = run_script(BODY_EMPTY_HIGHLIGHTS, tag=FALLBACK_TAG, url=FALLBACK_URL)
+    # Must fall back: the Highlights section had no content.
+    assert (
+        FALLBACK_TAG in out or "published" in out.lower()
+    ), f"Expected fallback output for empty Highlights; got: {out!r}"
+
+
+def test_empty_highlights_section_no_stray_separator():
+    """Empty Highlights section must NOT emit a bare '---' or '#' separator."""
+    out = run_script(BODY_EMPTY_HIGHLIGHTS, tag=FALLBACK_TAG, url=FALLBACK_URL)
+    lines = out.splitlines()
+    for line in lines:
+        assert not line.strip().startswith(
+            "##"
+        ), f"Stray heading separator found in output: {line!r}"
+
+
+# ---------------------------------------------------------------------------
+# 9. Exactly 1500 characters — at the truncation boundary (issue #235)
+# ---------------------------------------------------------------------------
+# The script truncates at >1500 chars (i.e. >=1501).  At exactly 1500 the
+# content must pass through unmodified with no ellipsis and no link appended.
+_EXACTLY_1500 = "B" * 1500
+BODY_EXACTLY_1500 = f"### Highlights\n\n{_EXACTLY_1500}\n\n### Changed\n\n- x\n"
+
+
+def test_exactly_1500_chars_not_truncated():
+    """Exactly 1500 characters must pass through without truncation or ellipsis."""
+    out = run_script(BODY_EXACTLY_1500, url=FALLBACK_URL)
+    assert "…" not in out, "Content of exactly 1500 chars should NOT be truncated"
+    assert FALLBACK_URL not in out, "No link should be appended when content is exactly at the cap"
+    assert _EXACTLY_1500 in out, "Full 1500-char content should appear verbatim in output"
+
+
+# ---------------------------------------------------------------------------
+# 10. No space after emoji (###📣Highlights) — fallback path (issue #235)
+# ---------------------------------------------------------------------------
+BODY_NO_SPACE_AFTER_EMOJI = """\
+###📣Highlights
+
+This content should NOT be extracted.
+
+### Fixed
+
+- Fix A.
+"""
+
+
+def test_no_space_after_emoji_triggers_fallback():
+    """'###📣Highlights' (no space after '###') is not a valid h3 heading.
+
+    The script requires '### ' (hash-hash-hash-space) as the h3 prefix.
+    A header without that space must not match, so the fallback description
+    is returned rather than the section content.
+    """
+    out = run_script(BODY_NO_SPACE_AFTER_EMOJI, tag=FALLBACK_TAG, url=FALLBACK_URL)
+    # The content under the malformed heading must NOT appear in output.
+    assert (
+        "This content should NOT be extracted" not in out
+    ), "Content under malformed heading (no space after ###) must not be extracted"
+    # The fallback must fire.
+    assert (
+        FALLBACK_TAG in out or "published" in out.lower()
+    ), f"Expected fallback for malformed heading; got: {out!r}"
+
+
+# ---------------------------------------------------------------------------
+# 11. Missing required args (0 or 1 args) — script errors (issue #235)
+# ---------------------------------------------------------------------------
+
+
+def _run_script_raw(body: str, args: list[str]) -> subprocess.CompletedProcess[str]:
+    """Run extract-highlights.sh with an explicit arg list, no check=True.
+
+    Args:
+        body: Text piped to the script's stdin.
+        args: Positional arguments passed after the script path.
+
+    Returns:
+        The completed subprocess result (returncode not asserted here).
+    """
+    return subprocess.run(
+        [BASH, str(SCRIPT)] + args,
+        input=body,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        check=False,
+    )
+
+
+def test_missing_both_args_exits_nonzero():
+    """Calling script with no args must exit non-zero (${1:?} guard fires)."""
+    result = _run_script_raw("### Highlights\n\nSome text.\n", args=[])
+    assert result.returncode != 0, (
+        f"Expected non-zero exit for missing both args; got {result.returncode}. "
+        f"stderr: {result.stderr!r}"
+    )
+
+
+def test_missing_second_arg_exits_nonzero():
+    """Calling script with only one arg must exit non-zero (${2:?} guard fires)."""
+    result = _run_script_raw("### Highlights\n\nSome text.\n", args=["v1.0.0"])
+    assert result.returncode != 0, (
+        f"Expected non-zero exit for missing second arg; got {result.returncode}. "
+        f"stderr: {result.stderr!r}"
+    )

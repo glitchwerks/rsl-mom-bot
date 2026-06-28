@@ -9,12 +9,12 @@ Covers:
   not 403/401 (the load-bearing ordering invariant for issue #209)
 - Unmetered paths (/api/version, /api/health) are NOT rate-limited
 - Total rate limit fires independently of per-IP limit
+- Rate-limit window expiry unblocks requests (issue #234)
 
 Design notes
 ------------
 - Uses FastAPI TestClient (sync); slowapi's in-memory storage is reset
-  between tests via a monkeypatch on the Limiter's storage so tests are
-  deterministic without freezegun.
+  between tests via ``limiter.reset()`` (public API, issue #233).
 - build_app is called with a low limit string so the test doesn't need to
   hammer 60 times per request.
 - No real Discord API or Postgres is involved; mock pattern mirrors
@@ -23,11 +23,13 @@ Design notes
 
 from __future__ import annotations
 
+import datetime
 from typing import Any
 from unittest.mock import MagicMock
 
 import discord
 import pytest
+import time_machine
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
@@ -159,15 +161,16 @@ def _make_client(
 def _reset_limiter(client: TestClient) -> None:
     """Clear all rate-limit counters on the limiter attached to the app.
 
-    slowapi stores per-key counters in its ``_storage`` backend.  Calling
-    ``reset()`` on the storage wipes all counters so tests don't bleed into
-    each other, avoiding the need for freezegun or per-test app construction.
+    Uses the public ``Limiter.reset()`` method introduced in slowapi >= 0.1.9,
+    which delegates to ``_storage.reset()`` internally.  Using the public
+    surface avoids breakage if slowapi renames its private ``_storage``
+    attribute in a future release (issue #233).
 
     Args:
         client: The TestClient whose app's limiter will be reset.
     """
     limiter = client.app.state.limiter  # type: ignore[attr-defined]
-    limiter._storage.reset()  # type: ignore[attr-defined]
+    limiter.reset()
 
 
 # ---------------------------------------------------------------------------
@@ -438,4 +441,75 @@ class TestTotalRateLimit:
         assert resp.status_code == 429, (
             f"Expected 429 from aggregate total limit after 5 requests, "
             f"got {resp.status_code}: {resp.text}"
+        )
+
+
+# ---------------------------------------------------------------------------
+# Rate-limit window expiry — limiter unblocks after the window elapses
+# ---------------------------------------------------------------------------
+
+
+class TestRateLimitWindowExpiry:
+    """Rate-limit window resets after the configured time period expires.
+
+    Verifies that a client blocked by the per-IP limit is unblocked once
+    the rate-limit window rolls over.  Uses ``time-machine`` to advance the
+    clock past the 60-second boundary without sleeping in real time (issue
+    #234).
+    """
+
+    def test_blocked_client_unblocked_after_window_expires(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Per-IP 429 clears after the window elapses.
+
+        Protocol:
+        1. Exhaust the per-IP limit (``1/minute``) — the second request
+           returns 429.
+        2. Advance the clock by 61 seconds with ``time_machine.travel`` so
+           the window rolls over.
+        3. Send one more request — must return non-429 (limit has reset).
+
+        Args:
+            monkeypatch: Pytest fixture for env var teardown.
+        """
+        client = _make_client(per_ip="1/minute", monkeypatch=monkeypatch)
+        _reset_limiter(client)
+
+        # Step 1: first request is within limit.
+        resp_ok = client.post(
+            "/api/internal/role-sync",
+            json=_ROLE_SYNC_PAYLOAD,
+            headers={"Authorization": f"Bearer {_VALID_KEY}"},
+        )
+        assert (
+            resp_ok.status_code != 429
+        ), f"First request unexpectedly rate-limited: {resp_ok.status_code}"
+
+        # Step 2: second request exhausts the 1/minute limit.
+        resp_limited = client.post(
+            "/api/internal/role-sync",
+            json=_ROLE_SYNC_PAYLOAD,
+            headers={"Authorization": f"Bearer {_VALID_KEY}"},
+        )
+        assert resp_limited.status_code == 429, (
+            f"Expected 429 after exhausting 1/minute limit, " f"got {resp_limited.status_code}"
+        )
+
+        # Step 3: advance the clock past the 60-second window boundary.
+        # time_machine.travel with tick=True lets real time run from the
+        # new start point, but moving 61 s ahead is sufficient to expire
+        # the /minute bucket regardless of execution speed.
+        future = datetime.datetime.now(tz=datetime.UTC) + datetime.timedelta(seconds=61)
+        with time_machine.travel(future, tick=False):
+            resp_after = client.post(
+                "/api/internal/role-sync",
+                json=_ROLE_SYNC_PAYLOAD,
+                headers={"Authorization": f"Bearer {_VALID_KEY}"},
+            )
+
+        assert resp_after.status_code != 429, (
+            f"Expected limiter to unblock after window expiry, "
+            f"got {resp_after.status_code}. "
+            "The window should have rolled over after 61 s."
         )
