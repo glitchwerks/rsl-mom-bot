@@ -191,6 +191,10 @@ resource ca 'Microsoft.App/containerApps@2024-03-01' = {
               name: 'APPLICATIONINSIGHTS_CONNECTION_STRING'
               secretRef: 'app-insights-connection-string'
             }
+            {
+              name: 'OTEL_SERVICE_NAME'
+              value: 'mom-bot'
+            }
           ]
           // httpGet liveness probe — calls GET /healthz on port 8080.
           // The /healthz endpoint returns 200 when the reminder scheduler has
