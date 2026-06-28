@@ -208,20 +208,18 @@ This is expected under concurrent edits. See the runbook § "Stale-write skips".
 
 ## Scenario 5 — Partial-response smoke
 
-**Status: cannot be exercised in the current codebase.**
+Set the `MOM_BOT_FORCE_PARTIAL_FOR_DISCORD_ID` environment variable on the
+bot container to the Discord snowflake of the test member before triggering
+the role-sync webhook for that member.  The seam forces the other-day
+`remove_roles` call to raise `discord.Forbidden` synthetically for that
+member only, producing a `partial` result without corrupting the live Discord
+role hierarchy.  All other members are unaffected — the env var is a no-op
+when absent or when the member does not match.
 
-The plan (§ D1) specifies a `MOM_BOT_FORCE_PARTIAL_FOR_DISCORD_ID` environment variable as a
-dev-only test seam that would force a 403 on one of the two role mutations, allowing the operator
-to observe the partial state on a live member. This seam does not exist in the deployed code.
-Grepping `src/` for `FORCE_PARTIAL` returns no matches (verified 2026-05-14).
+**Do not set this in production.  Remove the env var and redeploy after the
+smoke test is complete.**
 
-The `partial` response path is covered by unit tests (via mocked `discord.Forbidden` in
-`tests/`) but cannot be triggered against the live Discord API without either corrupting the
-hierarchy or adding the test seam.
-
-**Tracked in [#74](https://github.com/glitchwerks/mom-bot/issues/74).** Once that ships, the
-seam will be set via the bot's `MOM_BOT_FORCE_PARTIAL_FOR_DISCORD_ID` env var; rerun this
-scenario then.
+Shipped in [#74](https://github.com/glitchwerks/mom-bot/issues/74).
 
 **What a partial state looks like in practice (documented for operator awareness):**
 

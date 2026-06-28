@@ -600,3 +600,90 @@ class TestSidecarExceptionLogging:
                 await bot._reminder_task
             except (asyncio.CancelledError, Exception):
                 pass
+
+
+# ---------------------------------------------------------------------------
+# Test class: run_preflight wired into on_ready (issue #194)
+# ---------------------------------------------------------------------------
+
+
+class TestPreflightWiredInOnReady:
+    """run_preflight() is called once from on_ready after Discord READY."""
+
+    @pytest.mark.asyncio
+    async def test_run_preflight_called_during_on_ready(
+        self,
+        mock_health_server: AsyncMock,
+    ) -> None:
+        """on_ready() must call run_preflight with the live guild and factory.
+
+        Patches ``mom_bot.main.run_preflight`` and asserts it is called
+        exactly once when ``on_ready`` fires.  Uses the same helper
+        ``_run_setup_and_ready`` pattern as the sidecar bootstrap tests so the
+        full patch stack (load_secret, seed_day_role_map, get_guild …) is in
+        place.
+        """
+        from mom_bot.main import MomBot, build_intents
+
+        engine = _make_engine()
+        session_factory = _make_session_factory(engine)
+        fake_guild = _make_fake_guild()
+        bot = MomBot(intents=build_intents())
+
+        preflight_mock = MagicMock()
+        stack = await _run_setup_and_ready(
+            bot,
+            session_factory,
+            fake_guild,
+            extra_patches=[
+                patch("mom_bot.main.run_preflight", preflight_mock),
+            ],
+        )
+        stack.close()
+
+        preflight_mock.assert_called_once()
+        call_kwargs = preflight_mock.call_args.kwargs
+        assert call_kwargs["guild"] is fake_guild, (
+            "run_preflight must receive the live guild object from "
+            "get_guild(), not the discord.Object snowflake wrapper"
+        )
+
+        await _cleanup(bot)
+
+    @pytest.mark.asyncio
+    async def test_run_preflight_called_only_once_on_reconnect(
+        self,
+        mock_health_server: AsyncMock,
+    ) -> None:
+        """run_preflight() fires exactly once even if on_ready fires twice.
+
+        Discord re-emits on_ready on reconnect.  The _preflight_done guard
+        must prevent a second call.
+        """
+        from mom_bot.main import MomBot, build_intents
+
+        engine = _make_engine()
+        session_factory = _make_session_factory(engine)
+        fake_guild = _make_fake_guild()
+        bot = MomBot(intents=build_intents())
+
+        preflight_mock = MagicMock()
+        stack = await _run_setup_and_ready(
+            bot,
+            session_factory,
+            fake_guild,
+            extra_patches=[
+                patch("mom_bot.main.run_preflight", preflight_mock),
+            ],
+        )
+
+        # Simulate a Discord reconnect: on_ready fires a second time.
+        await bot.on_ready()
+        stack.close()
+
+        assert preflight_mock.call_count == 1, (
+            "run_preflight must run only once per process lifetime; "
+            f"it was called {preflight_mock.call_count} time(s)"
+        )
+
+        await _cleanup(bot)

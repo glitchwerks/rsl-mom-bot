@@ -971,3 +971,151 @@ async def test_hierarchy_lost_event_deduplicated_per_role(
         f"Expected exactly 1 ROLE_HIERARCHY_LOST_AT_RUNTIME event, "
         f"got {len(error_msgs)}: {error_msgs}"
     )
+
+
+# ---------------------------------------------------------------------------
+# MOM_BOT_FORCE_PARTIAL_FOR_DISCORD_ID test seam (issue #74)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_force_partial_seam_fires_when_env_matches(
+    seeded_factory: sessionmaker[Session],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Seam forces partial result when env var matches the member discord_id.
+
+    Sets ``MOM_BOT_FORCE_PARTIAL_FOR_DISCORD_ID`` to the test member's
+    Discord ID string.  The other-day ``remove_roles`` must raise
+    ``discord.Forbidden`` synthetically so:
+
+    - ``result.status`` is ``"partial"``
+    - ``result.reason`` is ``"remove_of_other_day_failed_403"``
+    - ``result.added`` contains the new role ID
+    - ``result.removed`` is empty (removal was blocked)
+    - ``member.add_roles`` was still awaited (add proceeds despite 403)
+
+    Args:
+        seeded_factory: Session factory pre-seeded with Day 1 and Day 2 rows.
+        monkeypatch: pytest monkeypatch fixture.
+    """
+    from mom_bot.roles.service import apply_day_role
+
+    monkeypatch.setenv("MOM_BOT_FORCE_PARTIAL_FOR_DISCORD_ID", str(_MEMBER_DISCORD_ID))
+
+    role_day1 = _make_role(_ROLE_ID_DAY1, "Siege - Day 1 Attacker")
+    role_day2 = _make_role(_ROLE_ID_DAY2, "Siege - Day 2 Attacker")
+    member = _make_member(held_role_ids=[_ROLE_ID_DAY1])
+    member.roles = [role_day1]
+    # remove_roles would normally succeed — seam must override this.
+    member.remove_roles = AsyncMock()
+    guild = _make_guild(
+        member=member,
+        roles=[role_day1, role_day2],
+        bot_top_role=_make_bot_role(position=10),
+    )
+
+    result = await apply_day_role(
+        guild=guild,
+        discord_id=_MEMBER_DISCORD_ID,
+        action="assign",
+        day_number=2,
+        correlation_id=_CORRELATION_ID,
+        session_factory=seeded_factory,
+    )
+
+    assert result.status == "partial", f"Expected status='partial' from seam; got {result.status!r}"
+    assert (
+        result.reason == "remove_of_other_day_failed_403"
+    ), f"Expected reason='remove_of_other_day_failed_403'; got {result.reason!r}"
+    assert result.added == [_ROLE_ID_DAY2], f"Expected added=[{_ROLE_ID_DAY2}]; got {result.added}"
+    assert result.removed == [], f"Expected removed=[]; got {result.removed}"
+    # The seam raises before remove_roles is awaited.
+    member.remove_roles.assert_not_awaited()
+    # The add must still succeed.
+    member.add_roles.assert_awaited_once_with(role_day2)
+
+
+@pytest.mark.asyncio
+async def test_force_partial_seam_absent_when_env_unset(
+    seeded_factory: sessionmaker[Session],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Seam is silent when MOM_BOT_FORCE_PARTIAL_FOR_DISCORD_ID is absent.
+
+    Without the env var, a Day-M→Day-N swap with a successful ``remove_roles``
+    must return ``"applied"`` (unchanged behaviour).
+
+    Args:
+        seeded_factory: Session factory pre-seeded with Day 1 and Day 2 rows.
+        monkeypatch: pytest monkeypatch fixture.
+    """
+    from mom_bot.roles.service import apply_day_role
+
+    monkeypatch.delenv("MOM_BOT_FORCE_PARTIAL_FOR_DISCORD_ID", raising=False)
+
+    role_day1 = _make_role(_ROLE_ID_DAY1, "Siege - Day 1 Attacker")
+    role_day2 = _make_role(_ROLE_ID_DAY2, "Siege - Day 2 Attacker")
+    member = _make_member(held_role_ids=[_ROLE_ID_DAY1])
+    member.roles = [role_day1]
+    guild = _make_guild(
+        member=member,
+        roles=[role_day1, role_day2],
+        bot_top_role=_make_bot_role(position=10),
+    )
+
+    result = await apply_day_role(
+        guild=guild,
+        discord_id=_MEMBER_DISCORD_ID,
+        action="assign",
+        day_number=2,
+        correlation_id=_CORRELATION_ID,
+        session_factory=seeded_factory,
+    )
+
+    assert (
+        result.status == "applied"
+    ), f"Without env var, swap must return 'applied'; got {result.status!r}"
+
+
+@pytest.mark.asyncio
+async def test_force_partial_seam_silent_for_non_matching_id(
+    seeded_factory: sessionmaker[Session],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Seam is silent when env var is set but does not match the member id.
+
+    The seam must only fire for the exact snowflake it names.  Any other
+    member must get normal ``"applied"`` behaviour.
+
+    Args:
+        seeded_factory: Session factory pre-seeded with Day 1 and Day 2 rows.
+        monkeypatch: pytest monkeypatch fixture.
+    """
+    from mom_bot.roles.service import apply_day_role
+
+    _OTHER_MEMBER_ID = _MEMBER_DISCORD_ID + 1
+    monkeypatch.setenv("MOM_BOT_FORCE_PARTIAL_FOR_DISCORD_ID", str(_OTHER_MEMBER_ID))
+
+    role_day1 = _make_role(_ROLE_ID_DAY1, "Siege - Day 1 Attacker")
+    role_day2 = _make_role(_ROLE_ID_DAY2, "Siege - Day 2 Attacker")
+    member = _make_member(held_role_ids=[_ROLE_ID_DAY1])
+    member.roles = [role_day1]
+    guild = _make_guild(
+        member=member,
+        roles=[role_day1, role_day2],
+        bot_top_role=_make_bot_role(position=10),
+    )
+
+    result = await apply_day_role(
+        guild=guild,
+        discord_id=_MEMBER_DISCORD_ID,
+        action="assign",
+        day_number=2,
+        correlation_id=_CORRELATION_ID,
+        session_factory=seeded_factory,
+    )
+
+    assert result.status == "applied", (
+        "Non-matching env var must leave behaviour unchanged; " f"got {result.status!r}"
+    )
