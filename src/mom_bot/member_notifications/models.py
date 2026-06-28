@@ -35,6 +35,7 @@ from sqlalchemy import (
     CheckConstraint,
     Date,
     ForeignKey,
+    Index,
     Integer,
     Text,
     Time,
@@ -136,6 +137,10 @@ class MemberNotificationSent(Base):
             "member_notification_id",
             "occurrence_date_utc",
             name="uq_member_notification_sent_per_day",
+        ),
+        Index(
+            "ix_member_notification_sent_occurrence_date_utc",
+            "occurrence_date_utc",
         ),
     )
 
