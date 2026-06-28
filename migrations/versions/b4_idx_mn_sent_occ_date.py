@@ -10,7 +10,7 @@ Without this index the query must scan the full table using the leading
 occurrence_date_utc)``.  A standalone index on ``occurrence_date_utc``
 lets the planner seek directly to today's rows.
 
-Revision ID: b4_index_member_notification_sent_date
+Revision ID: b4_idx_mn_sent_occ_date
 Revises: b3_member_notifications
 Create Date: 2026-06-28
 """
@@ -22,7 +22,7 @@ from collections.abc import Sequence
 from alembic import op
 
 # revision identifiers, used by Alembic.
-revision: str = "b4_index_member_notification_sent_date"
+revision: str = "b4_idx_mn_sent_occ_date"
 down_revision: str | Sequence[str] | None = "b3_member_notifications"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
