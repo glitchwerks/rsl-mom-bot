@@ -52,6 +52,7 @@ from mom_bot.post_conditions.client import SiegeWebClient
 from mom_bot.post_conditions.commands import register as _register_post_conditions
 from mom_bot.reminders.scheduler import ReminderScheduler
 from mom_bot.reminders.seed import _maybe_seed_reminders
+from mom_bot.roles import run_preflight
 from mom_bot.roles.seed import seed_day_role_map
 from mom_bot.sidecar import build_app
 from mom_bot.telemetry import configure_azure_monitor
@@ -128,6 +129,10 @@ SiegeWebClient` instance registered via :func:`make_client`; stored so
         _sidecar_server: The :class:`uvicorn.Server` instance serving the
             FastAPI sidecar; stored so :meth:`close` can signal it to stop
             by setting ``should_exit = True`` before awaiting the task.
+        _preflight_done: Once-guard flag; set to ``True`` after the first
+            :func:`~mom_bot.roles.run_preflight` call so that Discord's
+            possible re-emission of ``on_ready`` on reconnect does not
+            re-run the preflight check (plan #76 AC #3).
     """
 
     def __init__(self, intents: discord.Intents) -> None:
@@ -145,6 +150,9 @@ SiegeWebClient` instance registered via :func:`make_client`; stored so
         self._siege_client: SiegeWebClient | None = None
         self._sidecar_task: asyncio.Task[None] | None = None
         self._sidecar_server: uvicorn.Server | None = None
+        # Once-guard: preflight runs once per process lifetime even if Discord
+        # re-emits on_ready on reconnect (plan #76 AC #3).
+        self._preflight_done: bool = False
 
     async def setup_hook(self) -> None:
         """Sync slash commands and spawn the post-READY init task.
@@ -270,7 +278,7 @@ SiegeWebClient` instance registered via :func:`make_client`; stored so
             raise
 
     async def on_ready(self) -> None:
-        """Log connection details, seed day-role map, and start sidecar server.
+        """Log connection, seed day-role map, run preflight, start sidecar.
 
         Emits a structured INFO record with the bot user, guild count, member
         count, and raw intent bitfield value so operators can verify the
@@ -282,6 +290,12 @@ SiegeWebClient` instance registered via :func:`make_client`; stored so
         Discord API blip) does not bring down the bot — Discord can call
         ``on_ready`` multiple times across reconnects, and missing one seed
         cycle is preferable to crashing.
+
+        Runs :func:`~mom_bot.roles.run_preflight` once per process lifetime
+        (guarded by ``self._preflight_done``).  Emits the
+        ``role_preflight_complete`` INFO log line (plan #76 AC #3).  Failure
+        is caught and logged so a misconfigured hierarchy does not prevent the
+        bot from starting.
 
         Finally, starts the in-process FastAPI sidecar via
         :func:`~mom_bot.sidecar.build_app` and uvicorn on port ``8001``.
@@ -314,6 +328,32 @@ SiegeWebClient` instance registered via :func:`make_client`; stored so
                 "day_role_map seed failed; bot continues without updated "
                 "role map — will retry on next on_ready"
             )
+
+        # Run role-hierarchy preflight once per process lifetime (plan #76 AC
+        # #3).  The once-guard prevents duplicate runs on Discord reconnects
+        # that re-emit on_ready.  Failure is logged but does not crash the bot
+        # — the existing log line inside run_preflight is the AC log artifact;
+        # no duplication needed here.
+        if not self._preflight_done:
+            guild_id = int(load_secret("guild-id"))
+            live_guild = self.get_guild(guild_id)
+            if live_guild is not None:
+                try:
+                    run_preflight(
+                        guild=live_guild,
+                        session_factory=_build_session_factory(_resolve_db_url()),
+                    )
+                    self._preflight_done = True
+                except Exception:
+                    _logger.exception(
+                        "run_preflight failed; bot continues — "
+                        "role hierarchy may be misconfigured"
+                    )
+            else:
+                _logger.warning(
+                    "run_preflight skipped: get_guild(%s) returned None",
+                    guild_id,
+                )
 
         # Start the FastAPI sidecar on port 8001.  Idempotent: if the task
         # is already running (reconnect scenario), leave it untouched.

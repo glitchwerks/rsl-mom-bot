@@ -16,6 +16,17 @@ Provides two public callables:
     :class:`~mom_bot.config.ConfigError` if any mapped role is ranked
     at-or-above the bot's highest role (would cause 403 on every sync call).
 
+Dev-only test seam
+------------------
+When the environment variable ``MOM_BOT_FORCE_PARTIAL_FOR_DISCORD_ID`` is
+set to a member's Discord snowflake (as a string), the other-day
+``remove_roles`` call in ``_handle_assign`` raises ``discord.Forbidden``
+synthetically for that member, producing a ``partial`` result with
+``reason="remove_of_other_day_failed_403"``.  This allows Scenario 5 of the
+day-role-sync smoke test to be exercised against a live bot without corrupting
+the guild's role hierarchy.  **The env var must never be set in production.**
+When absent or non-matching, behaviour is identical to the unpatched code.
+
 Design notes
 ------------
 - The ``_hierarchy_loss_emitted`` module-level ``set`` deduplicates the
@@ -31,6 +42,7 @@ Design notes
 from __future__ import annotations
 
 import logging
+import os
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Literal
 
@@ -309,6 +321,20 @@ async def _handle_assign(
 
     if other_day_role is not None:
         try:
+            # Dev-only test seam (issue #74): when
+            # MOM_BOT_FORCE_PARTIAL_FOR_DISCORD_ID is set and matches this
+            # member, raise Forbidden to exercise the partial-response path
+            # without corrupting the live Discord role hierarchy.
+            # ABSENT or non-matching → zero behaviour change.
+            _force_partial_id = os.environ.get("MOM_BOT_FORCE_PARTIAL_FOR_DISCORD_ID")
+            if _force_partial_id is not None and str(discord_id) == _force_partial_id:
+                import types as _types
+
+                _fake_resp = _types.SimpleNamespace(status=403, reason="Forbidden")
+                raise _discord.Forbidden(
+                    _fake_resp,  # type: ignore[arg-type]
+                    "Forced 403 by MOM_BOT_FORCE_PARTIAL_FOR_DISCORD_ID",
+                )
             await member.remove_roles(other_day_role)
             removed_ids.append(other_day_role_id)  # type: ignore[arg-type]
         except _discord.Forbidden:
