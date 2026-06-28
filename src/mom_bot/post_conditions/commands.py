@@ -50,7 +50,7 @@ __all__ = [
 
 _logger = logging.getLogger(__name__)
 
-_LINK_YOUR_ACCOUNT_MSG = (
+_NOT_REGISTERED_MSG = (
     "Your Discord account isn't registered with siege-web yet. "
     "Ask a clan admin to add you, then try this command again."
 )
@@ -133,7 +133,7 @@ async def post_conditions_get(
             discord_username=discord_username,
         )
     except SiegeWebNotFoundError:
-        await interaction.followup.send(_LINK_YOUR_ACCOUNT_MSG, ephemeral=True)
+        await interaction.followup.send(_NOT_REGISTERED_MSG, ephemeral=True)
         return
     except SiegeWebAuthError:
         _logger.error(
@@ -202,7 +202,7 @@ async def post_conditions_set(
             ),
         )
     except SiegeWebNotFoundError:
-        await interaction.followup.send(_LINK_YOUR_ACCOUNT_MSG, ephemeral=True)
+        await interaction.followup.send(_NOT_REGISTERED_MSG, ephemeral=True)
         return
     except SiegeWebAuthError:
         _logger.error(

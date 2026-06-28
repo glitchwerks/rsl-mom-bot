@@ -13,9 +13,10 @@ All five commands are officer-gated (spec § 2.8 — option A+B):
 
 - **(A)** ``@app_commands.default_permissions(manage_guild=True)`` hides
   commands from non-officers in Discord's UI (soft enforcement).
-- **(B)** In-handler ``interaction.user.guild_permissions.manage_guild``
-  check provides the actual runtime boundary; non-officers receive an
-  ephemeral rejection and the service is never called.
+- **(B)** ``@require_manage_guild`` decorator from
+  :mod:`mom_bot.discord_authz` provides the actual runtime boundary;
+  non-officers receive an ephemeral rejection and the service is never
+  called.
 
 Usage
 -----
@@ -41,6 +42,7 @@ import discord
 import discord.app_commands as app_commands
 from discord.app_commands import Choice
 
+from mom_bot.discord_authz import require_manage_guild
 from mom_bot.member_notifications.service import (
     _VALID_CADENCES,
     DuplicateNotificationError,
@@ -63,7 +65,6 @@ _logger = logging.getLogger(__name__)
 # Module-level message constants (spec § 2.7)
 # ---------------------------------------------------------------------------
 
-_OFFICERS_ONLY_MSG = "This command is restricted to officers (Manage Server permission)."
 _OPS_ERROR_MSG = "An internal error occurred. Please try again later."
 _INVALID_DATE_MSG = "Invalid start_date — expected format YYYY-MM-DD (e.g. '2027-06-01')."
 _INVALID_TIME_MSG = (
@@ -129,24 +130,13 @@ def _parse_time(value: str) -> datetime.time | None:
         return None
 
 
-def _check_officer(interaction: discord.Interaction) -> bool:
-    """Return True if the invoker has the manage_guild permission.
-
-    Args:
-        interaction: The Discord slash-command interaction.
-
-    Returns:
-        ``True`` if the invoker is an officer; ``False`` otherwise.
-    """
-    return bool(interaction.user.guild_permissions.manage_guild)  # type: ignore[union-attr]
-
-
 # ---------------------------------------------------------------------------
 # Command handlers
 # ---------------------------------------------------------------------------
 
 
 @app_commands.default_permissions(manage_guild=True)
+@require_manage_guild
 async def member_notify_add(
     interaction: discord.Interaction,
     *,
@@ -160,10 +150,12 @@ async def member_notify_add(
 ) -> None:
     """Handle ``/member-notify-add`` — create a new member notification.
 
-    Defers the interaction, validates officer permissions and input, then
-    calls the service to create the row.  The member's Discord ID is read
-    from ``member.id`` (not from a username lookup) and stored as the
-    opaque ``target_discord_id`` string (spec § 2.6).
+    Validates input, then calls the service to create the row.  The member's
+    Discord ID is read from ``member.id`` (not from a username lookup) and
+    stored as the opaque ``target_discord_id`` string (spec § 2.6).
+
+    The ``@require_manage_guild`` decorator handles ephemeral defer and the
+    option-B runtime permission check before this body is reached.
 
     Args:
         interaction: The Discord slash-command interaction.
@@ -176,13 +168,6 @@ async def member_notify_add(
         cadence: One of ``'weekly'``, ``'biweekly'``, or ``'monthly'``.
         message: Static message body sent as the DM.
     """
-    await interaction.response.defer(ephemeral=True)
-
-    # Option B — runtime permission check.
-    if not _check_officer(interaction):
-        await interaction.followup.send(_OFFICERS_ONLY_MSG, ephemeral=True)
-        return
-
     # Input validation (handler validates before calling service).
     parsed_date = _parse_date(start_date)
     if parsed_date is None:
@@ -237,6 +222,7 @@ _MANAGE_GUILD_PERMS = discord.Permissions(manage_guild=True)
 
 
 @app_commands.default_permissions(manage_guild=True)
+@require_manage_guild
 async def member_notify_list(
     interaction: discord.Interaction,
     *,
@@ -247,17 +233,13 @@ async def member_notify_list(
     Sends an ephemeral list of all notifications including member,
     anchor date, fire time, cadence, and enabled status.
 
+    The ``@require_manage_guild`` decorator handles ephemeral defer and the
+    option-B runtime permission check before this body is reached.
+
     Args:
         interaction: The Discord slash-command interaction.
         service: The in-process :class:`MemberNotificationService`.
     """
-    await interaction.response.defer(ephemeral=True)
-
-    # Option B — runtime permission check.
-    if not _check_officer(interaction):
-        await interaction.followup.send(_OFFICERS_ONLY_MSG, ephemeral=True)
-        return
-
     try:
         rows = service.list_all()
         if not rows:
@@ -279,6 +261,7 @@ async def member_notify_list(
 
 
 @app_commands.default_permissions(manage_guild=True)
+@require_manage_guild
 async def member_notify_get(
     interaction: discord.Interaction,
     *,
@@ -290,18 +273,14 @@ async def member_notify_get(
     Sends an ephemeral detail view for the named notification, or an
     ephemeral not-found message if the name is absent.
 
+    The ``@require_manage_guild`` decorator handles ephemeral defer and the
+    option-B runtime permission check before this body is reached.
+
     Args:
         interaction: The Discord slash-command interaction.
         service: The in-process :class:`MemberNotificationService`.
         name: The notification's human-readable label.
     """
-    await interaction.response.defer(ephemeral=True)
-
-    # Option B — runtime permission check.
-    if not _check_officer(interaction):
-        await interaction.followup.send(_OFFICERS_ONLY_MSG, ephemeral=True)
-        return
-
     try:
         row = service.get(name)
         if row is None:
@@ -327,6 +306,7 @@ async def member_notify_get(
 
 
 @app_commands.default_permissions(manage_guild=True)
+@require_manage_guild
 async def member_notify_update(
     interaction: discord.Interaction,
     *,
@@ -344,6 +324,9 @@ async def member_notify_update(
     All fields except *name* are optional; only provided fields are
     updated.  Supports ``enabled`` toggle AND anchor/time/cadence edits.
 
+    The ``@require_manage_guild`` decorator handles ephemeral defer and the
+    option-B runtime permission check before this body is reached.
+
     Args:
         interaction: The Discord slash-command interaction.
         service: The in-process :class:`MemberNotificationService`.
@@ -356,13 +339,6 @@ async def member_notify_update(
         message: Optional new message body.
         enabled: Optional new enabled flag.
     """
-    await interaction.response.defer(ephemeral=True)
-
-    # Option B — runtime permission check.
-    if not _check_officer(interaction):
-        await interaction.followup.send(_OFFICERS_ONLY_MSG, ephemeral=True)
-        return
-
     fields: dict[str, object] = {}
 
     if member is not None:
@@ -405,6 +381,7 @@ async def member_notify_update(
 
 
 @app_commands.default_permissions(manage_guild=True)
+@require_manage_guild
 async def member_notify_remove(
     interaction: discord.Interaction,
     *,
@@ -417,18 +394,14 @@ async def member_notify_remove(
     Sends an ephemeral confirmation on success, or an ephemeral not-found
     message if absent.
 
+    The ``@require_manage_guild`` decorator handles ephemeral defer and the
+    option-B runtime permission check before this body is reached.
+
     Args:
         interaction: The Discord slash-command interaction.
         service: The in-process :class:`MemberNotificationService`.
         name: The notification's human-readable label.
     """
-    await interaction.response.defer(ephemeral=True)
-
-    # Option B — runtime permission check.
-    if not _check_officer(interaction):
-        await interaction.followup.send(_OFFICERS_ONLY_MSG, ephemeral=True)
-        return
-
     try:
         service.delete(name)
         await interaction.followup.send(f"Notification '{name}' removed.", ephemeral=True)
