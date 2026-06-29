@@ -10,6 +10,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 <!-- Add a "### 📣 Highlights" sub-section here before cutting the next release.
      See RELEASING.md § "Discord Highlights convention" for what to write there. -->
 
+## [1.3.0] - 2026-06-29
+
+### 📣 Highlights
+
+v1.3.0 is a reliability and observability release — no new commands, but several things that make the bot more self-correcting and easier to operate:
+
+- **Startup role-mapping preflight** — the bot now self-verifies its day-role mapping once per boot (reconnect-safe, and a preflight error can never crash the bot).
+- **App Insights service name** — the service now identifies itself as `mom-bot` instead of `unknown_service` in Azure Application Insights (takes effect after the next infra deploy).
+- **Faster due-notification lookups** — a new database index on `occurrence_date_utc` speeds per-member notification queries.
+- **Security** — pip upgraded past CVE-2026-6357; Dependabot now opens automatic PRs to keep GitHub Actions pins current.
+
+### Added
+
+- **Startup role preflight** — `run_preflight()` is now called from `MomBot.on_ready()` (after `seed_day_role_map`), guarded by a `_preflight_done` flag so a Discord reconnect can't re-run it, and defensively wrapped so a preflight error can't crash the bot; emits the `role_preflight_complete` log line once per revision boot (#194, #292).
+- **Dev-only partial-response test seam** — `MOM_BOT_FORCE_PARTIAL_FOR_DISCORD_ID` env var in `_handle_assign()` forces a partial role-sync result for smoke Scenario 5; absent or non-matching means zero behavior change (#74, #292).
+
+### Changed
+
+- **Authorization refactor (behavior-preserving)** — extracted the duplicated manage-guild check from the five `/member-notify-*` handlers into a shared `require_manage_guild` decorator in new `src/mom_bot/discord_authz.py`; removed dead `_check_officer` / `_OFFICERS_ONLY_MSG`; renamed `_LINK_YOUR_ACCOUNT_MSG` → `_NOT_REGISTERED_MSG` (#154, #289).
+
+### Infrastructure
+
+- **Index on `member_notification_sent.occurrence_date_utc`** — Alembic migration `b4` + matching ORM index backing the `list_due()` date filter (previously only covered by the composite UNIQUE) (#278, #291).
+- **`OTEL_SERVICE_NAME=mom-bot`** added to the container env so App Insights `cloud_RoleName` resolves to `mom-bot` instead of `unknown_service`; needs an infra-deploy apply to take effect (#271, #291).
+- **pip-audit hardening** — pip upgraded past CVE-2026-6357 in the pip-audit job; added `.github/dependabot.yml` (github-actions ecosystem, weekly) to auto-update Action SHA pins (#59, #60, #282).
+
+### Documentation
+
+- **Rollback runbook §7.1** — filled the prod siege-web placeholders with the verified names `siege-web-prod` / `siege-web-api-prod` (confirmed via `az containerapp show`) (#208, #293).
+
 ## [1.2.0] - 2026-06-28
 
 ### 📣 Highlights
