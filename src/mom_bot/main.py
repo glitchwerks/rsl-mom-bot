@@ -366,16 +366,22 @@ SiegeWebClient` instance registered via :func:`make_client`; stored so
 
         Args:
             member: The guild member whose join event Discord dispatched.
-
-        Raises:
-            ConfigError: If the new-members channel secret cannot be loaded.
-            ValueError: If the configured channel ID is not an integer.
-            discord.HTTPException: If Discord rejects the welcome message.
         """
         if member.bot:
             return
 
-        channel_id = int(load_secret("new-members-channel-id"))
+        channel_secret = "new-members-channel-id"
+        try:
+            channel_id = int(load_secret(channel_secret))
+        except Exception:
+            _logger.exception(
+                "Failed to resolve channel ID from secret %r for member %d; "
+                "welcome message not sent",
+                channel_secret,
+                member.id,
+            )
+            return
+
         raw_channel = self.get_channel(channel_id)
         if raw_channel is None:
             _logger.error(
@@ -384,12 +390,33 @@ SiegeWebClient` instance registered via :func:`make_client`; stored so
             )
             return
 
+        if not isinstance(raw_channel, discord.abc.Messageable) and not callable(
+            getattr(raw_channel, "send", None)
+        ):
+            _logger.warning(
+                "New-members channel %d is not messageable for member %d; "
+                "welcome message not sent",
+                channel_id,
+                member.id,
+            )
+            return
+
         channel = cast(discord.abc.Messageable, raw_channel)
-        await channel.send(
-            f"👋 Welcome, {member.mention}! Glad to have you here.\n"
-            "Next, check the pinned rules and pick your roles in #roles to get going.\n"
-            "Someone from the team will swing by shortly to help you settle in — hang tight!"
-        )
+        try:
+            await channel.send(
+                f"👋 Welcome, {member.mention}! Glad to have you here.\n"
+                "Next, check the pinned rules and pick your roles in #roles to get going.\n"
+                "Someone from the team will swing by shortly to help you settle in — hang tight!"
+            )
+        except (discord.Forbidden, discord.HTTPException):
+            _logger.warning(
+                "Failed to send welcome message for member %d to channel %d",
+                member.id,
+                channel_id,
+                exc_info=True,
+            )
+            return
+
         _logger.info(
             "Sent welcome message for member %d to channel %d",
             member.id,
