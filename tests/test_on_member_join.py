@@ -84,6 +84,32 @@ Failure-handling tests (added post-PR#303 Codex review; issue #299 follow-up):
   further calls) take over. This contradicts the "no error handling
   exists yet" premise for the None-channel case specifically — flagged
   for the router/spec-owner rather than silently adjusted here.
+- Update (guild-scoping reconciliation pass): Tests 3-7 now configure
+  ``bot.guild`` and pass a matching ``guild_id`` to ``_make_member`` (see
+  the "Target-guild scoping tests" note below) so the guild guard added
+  for Tests 8-9 is a no-op for their scenarios — this setup addition does
+  not change any assertion. Confirmed by re-running this module: all of
+  Tests 3-7 pass against the current implementation (full failure-handling
+  has since landed for every path, superseding the "Tests 4-7 fail today"
+  status captured above at authoring time).
+
+Target-guild scoping tests (CodeRabbit review of PR #303; issue #299
+follow-up):
+- The bot can be a member of multiple Discord guilds (``bot.guilds``,
+  plural), but only one is the configured target, tracked on
+  ``bot.guild: discord.Object | None`` (set from the KV-configured
+  ``guild-id`` during startup wireup). Tests 8-9 lock down that
+  ``on_member_join`` must ignore any join that is not in that configured
+  target guild — before any of the channel-resolution machinery
+  (``load_secret``, ``get_channel``) runs — mirroring the bot-skip
+  assertion style of Test 2.
+- Test 8 covers a join in a guild other than the configured target
+  (``member.guild.id != bot.guild.id``). Test 9 covers the
+  not-yet-configured case (``bot.guild is None``). Both are **red as
+  authored**: no guild-matching check exists yet in ``on_member_join``,
+  so today ``load_secret``/``get_channel`` are called (and, in Test 8,
+  ``fake_channel.send`` too) regardless of which guild the join came
+  from.
 """
 
 from __future__ import annotations
@@ -96,6 +122,8 @@ import pytest
 
 _NEW_MEMBERS_CHANNEL_ID = 555555555555555555
 _MEMBER_ID = 200000000000000042
+_TARGET_GUILD_ID = 300000000000000001
+_OTHER_GUILD_ID = 300000000000000099
 
 
 class FakeChannel:
@@ -115,12 +143,16 @@ class FakeChannel:
         self.send = AsyncMock()
 
 
-def _make_member(*, is_bot: bool = False) -> MagicMock:
+def _make_member(*, is_bot: bool = False, guild_id: int | None = None) -> MagicMock:
     """Build a minimal ``discord.Member`` mock.
 
     Args:
         is_bot: Whether the joining account is itself a bot, mirroring the
             real ``discord.Member.bot`` attribute.
+        guild_id: If given, sets ``member.guild.id`` to this snowflake, so
+            tests can simulate a join in a specific (possibly non-target)
+            guild. If omitted, ``member.guild`` remains an unconfigured
+            auto-mock, which is fine for tests that never inspect it.
 
     Returns:
         A :class:`~unittest.mock.MagicMock` with ``spec=discord.Member``.
@@ -129,6 +161,8 @@ def _make_member(*, is_bot: bool = False) -> MagicMock:
     member.id = _MEMBER_ID
     member.mention = f"<@{_MEMBER_ID}>"
     member.bot = is_bot
+    if guild_id is not None:
+        member.guild.id = guild_id
     return member
 
 
@@ -226,7 +260,8 @@ async def test_on_member_join_posts_welcome_message_with_mention() -> None:
 
     fake_channel = FakeChannel(_NEW_MEMBERS_CHANNEL_ID)
     bot = MomBot(intents=build_intents())
-    member = _make_member(is_bot=False)
+    bot.guild = discord.Object(id=_TARGET_GUILD_ID)
+    member = _make_member(is_bot=False, guild_id=_TARGET_GUILD_ID)
 
     with (
         patch("mom_bot.main.load_secret", side_effect=_fake_load_secret),
@@ -316,7 +351,8 @@ async def test_on_member_join_returns_when_channel_not_found(
     from mom_bot.main import MomBot, build_intents
 
     bot = MomBot(intents=build_intents())
-    member = _make_member(is_bot=False)
+    bot.guild = discord.Object(id=_TARGET_GUILD_ID)
+    member = _make_member(is_bot=False, guild_id=_TARGET_GUILD_ID)
 
     with caplog.at_level(logging.WARNING, logger="mom_bot.main"):
         with (
@@ -352,7 +388,8 @@ async def test_on_member_join_returns_when_load_secret_raises(
 
     fake_channel = FakeChannel(_NEW_MEMBERS_CHANNEL_ID)
     bot = MomBot(intents=build_intents())
-    member = _make_member(is_bot=False)
+    bot.guild = discord.Object(id=_TARGET_GUILD_ID)
+    member = _make_member(is_bot=False, guild_id=_TARGET_GUILD_ID)
 
     with caplog.at_level(logging.WARNING, logger="mom_bot.main"):
         with (
@@ -391,7 +428,8 @@ async def test_on_member_join_returns_when_channel_id_malformed(
 
     fake_channel = FakeChannel(_NEW_MEMBERS_CHANNEL_ID)
     bot = MomBot(intents=build_intents())
-    member = _make_member(is_bot=False)
+    bot.guild = discord.Object(id=_TARGET_GUILD_ID)
+    member = _make_member(is_bot=False, guild_id=_TARGET_GUILD_ID)
 
     with caplog.at_level(logging.WARNING, logger="mom_bot.main"):
         with (
@@ -431,7 +469,8 @@ async def test_on_member_join_returns_when_send_forbidden(
     fake_channel = FakeChannel(_NEW_MEMBERS_CHANNEL_ID)
     fake_channel.send.side_effect = _make_forbidden()
     bot = MomBot(intents=build_intents())
-    member = _make_member(is_bot=False)
+    bot.guild = discord.Object(id=_TARGET_GUILD_ID)
+    member = _make_member(is_bot=False, guild_id=_TARGET_GUILD_ID)
 
     with caplog.at_level(logging.WARNING, logger="mom_bot.main"):
         with (
@@ -471,7 +510,8 @@ async def test_on_member_join_returns_when_send_http_exception(
     fake_channel = FakeChannel(_NEW_MEMBERS_CHANNEL_ID)
     fake_channel.send.side_effect = _make_http_exception()
     bot = MomBot(intents=build_intents())
-    member = _make_member(is_bot=False)
+    bot.guild = discord.Object(id=_TARGET_GUILD_ID)
+    member = _make_member(is_bot=False, guild_id=_TARGET_GUILD_ID)
 
     with caplog.at_level(logging.WARNING, logger="mom_bot.main"):
         with (
@@ -518,7 +558,8 @@ async def test_on_member_join_returns_when_channel_not_messageable(
     non_messageable_channel = MagicMock(spec=discord.CategoryChannel)
     non_messageable_channel.id = _NEW_MEMBERS_CHANNEL_ID
     bot = MomBot(intents=build_intents())
-    member = _make_member(is_bot=False)
+    bot.guild = discord.Object(id=_TARGET_GUILD_ID)
+    member = _make_member(is_bot=False, guild_id=_TARGET_GUILD_ID)
 
     with caplog.at_level(logging.WARNING, logger="mom_bot.main"):
         with (
@@ -529,3 +570,72 @@ async def test_on_member_join_returns_when_channel_not_messageable(
 
     # Reaching this point already proves no exception propagated.
     _assert_warning_logged_by_main(caplog)
+
+
+# ---------------------------------------------------------------------------
+# Test 8 — join in a guild other than the configured target guild
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_on_member_join_returns_when_guild_mismatched() -> None:
+    """A join in a non-target guild must not trigger the welcome flow.
+
+    The bot can be a member of multiple Discord guilds (``bot.guilds``,
+    plural), but only one is configured as the target via ``bot.guild``
+    (a ``discord.Object`` set from the KV-configured ``guild-id``). A
+    member joining any OTHER guild the bot happens to be in must be
+    ignored entirely — before any of the channel-resolution machinery
+    (``load_secret``, ``get_channel``) runs, and before any message is
+    sent — otherwise a join in an unrelated secondary guild would post
+    the welcome message into the *primary* guild's configured channel.
+    """
+    from mom_bot.main import MomBot, build_intents
+
+    fake_channel = FakeChannel(_NEW_MEMBERS_CHANNEL_ID)
+    bot = MomBot(intents=build_intents())
+    bot.guild = discord.Object(id=_TARGET_GUILD_ID)
+    member = _make_member(is_bot=False, guild_id=_OTHER_GUILD_ID)
+
+    with (
+        patch("mom_bot.main.load_secret", side_effect=_fake_load_secret) as load_secret_mock,
+        patch.object(bot, "get_channel", return_value=fake_channel) as get_channel_mock,
+    ):
+        await bot.on_member_join(member)
+
+    fake_channel.send.assert_not_called()
+    load_secret_mock.assert_not_called()
+    get_channel_mock.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# Test 9 — target guild not yet configured (self.guild is None)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_on_member_join_returns_when_target_guild_not_configured() -> None:
+    """No configured target guild means no welcome flow runs at all.
+
+    Before startup wireup resolves the configured ``guild-id`` into
+    ``bot.guild``, ``bot.guild`` is ``None``. A member join arriving in
+    this window must be ignored — before any of the channel-resolution
+    machinery (``load_secret``, ``get_channel``) runs — rather than
+    falling back to treating every guild the bot is in as the target.
+    """
+    from mom_bot.main import MomBot, build_intents
+
+    fake_channel = FakeChannel(_NEW_MEMBERS_CHANNEL_ID)
+    bot = MomBot(intents=build_intents())
+    bot.guild = None
+    member = _make_member(is_bot=False)
+
+    with (
+        patch("mom_bot.main.load_secret", side_effect=_fake_load_secret) as load_secret_mock,
+        patch.object(bot, "get_channel", return_value=fake_channel) as get_channel_mock,
+    ):
+        await bot.on_member_join(member)
+
+    fake_channel.send.assert_not_called()
+    load_secret_mock.assert_not_called()
+    get_channel_mock.assert_not_called()

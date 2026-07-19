@@ -370,6 +370,9 @@ SiegeWebClient` instance registered via :func:`make_client`; stored so
         if member.bot:
             return
 
+        if self.guild is None or member.guild.id != self.guild.id:
+            return
+
         channel_secret = "new-members-channel-id"
         try:
             channel_id = int(load_secret(channel_secret))
