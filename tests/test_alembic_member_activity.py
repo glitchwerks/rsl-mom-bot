@@ -17,14 +17,53 @@ migrations (not ``create_all``) before deploy.
 
 from __future__ import annotations
 
+import logging.config
 from pathlib import Path
+from typing import Any
+from unittest.mock import patch
 
+import pytest
 import sqlalchemy as sa
 from alembic import command
 from alembic.config import Config
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 _ALEMBIC_INI = str(_REPO_ROOT / "alembic.ini")
+
+
+# ---------------------------------------------------------------------------
+# Module-scoped autouse fixture: prevent alembic from disabling loggers
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture(autouse=True, scope="module")
+def _no_disable_existing_loggers() -> Any:
+    """Force ``disable_existing_loggers=False`` on every ``fileConfig`` call.
+
+    ``alembic.command.upgrade``/``downgrade`` invoke ``migrations/env.py``,
+    which calls ``logging.config.fileConfig(alembic_ini)``.  The stdlib
+    default for ``disable_existing_loggers`` is ``True``, which sets
+    ``.disabled = True`` on every logger that already existed at call time —
+    process-wide, for the rest of the pytest session. This silently breaks
+    unrelated tests elsewhere in the suite that rely on ``caplog`` capturing
+    records from loggers such as ``mom_bot.roles``/``mom_bot.sidecar``.
+
+    This fixture wraps ``fileConfig`` so the ``disable_existing_loggers``
+    argument is always ``False``, without touching ``env.py`` or the
+    production logging configuration. Mirrors the identical fixture in
+    ``tests/test_alembic.py``, kept as a local copy here so this module
+    independently neutralizes the side effect regardless of test-collection
+    order or which other alembic test modules are present.
+    """
+    _real_fileConfig = logging.config.fileConfig
+
+    def _patched_fileConfig(fname: Any, *args: Any, **kwargs: Any) -> None:
+        """Delegate to real fileConfig with disable_existing_loggers=False."""
+        kwargs["disable_existing_loggers"] = False
+        _real_fileConfig(fname, *args, **kwargs)
+
+    with patch("logging.config.fileConfig", side_effect=_patched_fileConfig):
+        yield
 
 
 def _make_alembic_config(db_path: str) -> Config:

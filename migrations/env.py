@@ -18,6 +18,7 @@ from logging.config import fileConfig
 from alembic import context
 from sqlalchemy import engine_from_config, pool
 
+import mom_bot.member_activity.models  # noqa: F401 — registers MemberActivity on Base.metadata
 import mom_bot.new_member_alerts.models  # noqa: F401 — registers NewMemberAlertSubscription on Base.metadata
 import mom_bot.reminders.models  # noqa: F401 — registers Reminder + ReminderSent on Base.metadata
 import mom_bot.roles.models  # noqa: F401 — registers DayRoleMap on Base.metadata
