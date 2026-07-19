@@ -27,11 +27,19 @@ import pytest
 
 
 def test_build_intents_locked_set() -> None:
-    """build_intents() must enable exactly guilds, members, guild_scheduled_events.
+    """build_intents() must enable exactly guilds, members,
+    guild_scheduled_events, guild_messages.
 
     Verifies the intent bitfield matches the lock spec from Epic 0 session
     decisions. No extra intents (MESSAGE_CONTENT, GUILD_PRESENCES, etc.) should
     be set.
+
+    ``guild_messages`` was added deliberately for mom-bot#300 (member-activity
+    tracking for auto-kick): ``on_message`` needs this intent to fire at all.
+    It is a non-privileged Discord intent — no Developer Portal opt-in is
+    required, unlike ``message_content``/``members``/``presences`` — so this
+    addition does not raise the privacy/approval concerns that motivated the
+    original Epic 0 lock.
     """
     from mom_bot.main import build_intents
 
@@ -42,15 +50,17 @@ def test_build_intents_locked_set() -> None:
     expected.guilds = True
     expected.members = True
     expected.guild_scheduled_events = True
+    expected.guild_messages = True
 
     assert intents.value == expected.value, (
         f"Intent bitfield mismatch: got {intents.value!r}, " f"expected {expected.value!r}"
     )
 
-    # Explicitly confirm the three required flags and two common extras are off.
+    # Explicitly confirm the four required flags and two common extras are off.
     assert intents.guilds is True
     assert intents.members is True
     assert intents.guild_scheduled_events is True
+    assert intents.guild_messages is True
     assert intents.message_content is False
     assert intents.presences is False
 
