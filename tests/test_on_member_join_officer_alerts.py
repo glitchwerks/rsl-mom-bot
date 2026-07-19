@@ -4,31 +4,16 @@ Extends the ``on_member_join`` handler introduced in #299
 (``tests/test_on_member_join.py``, frozen and not modified here) with the
 officer join-alert notification behaviour from #301: every officer
 currently subscribed via ``/notify-new-members`` receives a DM naming the
-new member, and a single subscriber's ``discord.Forbidden`` does not
-block delivery to the others.
+new member, and a single subscriber's delivery failure does not block
+delivery to the others.
 
 TDD: written before any #301 implementation exists — see the authoring
-return for the exact red confirmation per file.
+return for the exact red confirmation per file. This revision layers in
+three adversarial-review fixes (Codex review) on top of the original
+#301 contract; see each section below for the fix it covers.
 
 Design/seam notes
 ------------------
-- Seam: mirrors the ``_build_session_factory`` patch seam already used by
-  ``on_ready`` (day-role-map seed, ``tests/test_main_wireup.py``) and
-  ``setup_hook`` rather than inventing a new
-  ``bot._new_member_alert_service`` instance attribute.  ``on_member_join``
-  is expected to build its own ``NewMemberAlertService`` inline via
-  ``_build_session_factory(_resolve_db_url())``, exactly like ``on_ready``
-  does for ``seed_day_role_map``.  Tests patch
-  ``mom_bot.main._build_session_factory`` to return an in-memory SQLite
-  sessionmaker, then seed real subscription rows through the real
-  ``NewMemberAlertService`` — asserting on observable DM sends, not on
-  service call arguments.  This is a binding contract for these tests
-  (flagged per the frozen-test convention in ``tests/test_on_member_join.py``
-  § "Binding contract decision") — an implementation that only builds the
-  service inside ``setup_hook``/stores it on a different attribute name
-  will fail these tests; that is a scope call for the router/spec-owner to
-  ratify or override, not something to silently work around by editing
-  this file.
 - DM recipient resolution mirrors the existing per-member DM pattern in
   ``mom_bot/reminders/scheduler.py::_handle_member_notification``:
   ``member.guild.get_member(int(user_id))`` then ``officer.send(message)``.
@@ -36,26 +21,75 @@ Design/seam notes
   target then DM it" and is treated as a binding contract here too — an
   implementation using ``bot.get_user``/``bot.fetch_user`` instead will
   fail these tests.
-- The welcome-channel path (#299) is made to fully succeed in every test
-  here (working ``load_secret`` + ``get_channel`` returning a working
-  ``FakeChannel``) so control reaches whatever point the officer-DM step
-  is wired at, regardless of the implementer's chosen ordering relative
-  to the welcome message. No test here asserts on relative ordering
-  between the welcome send and the officer DMs, or on behavior when the
-  welcome-channel path itself fails — that would pin an internal
-  implementation detail the AC does not specify.
-- Per issue #301 scope, only ``discord.Forbidden`` is tested as a
-  per-subscriber delivery failure — no broader error taxonomy
-  (NotFound/rate-limit/5xx) is in scope, mirroring the reminder
+- Per issue #301 scope, only per-subscriber delivery failures
+  (``discord.Forbidden``, ``discord.HTTPException`` — see the fix-3
+  section below) are tested — no broader error taxonomy (NotFound/5xx
+  distinctions beyond HTTPException) is in scope, mirroring the reminder
   scheduler's fuller taxonomy being explicitly out of scope for this
   issue.
-- Log assertion for the Forbidden case is deliberately NOT pinned to the
-  ``mom_bot.main`` logger name (unlike the frozen #299 tests in
-  ``tests/test_on_member_join.py``) because the officer-DM helper may
-  reasonably live in ``mom_bot.new_member_alerts`` instead of inline in
-  ``main.py``; only "some WARNING-or-higher record was emitted" is
-  asserted — the load-bearing assertion is that the *other* subscribers
-  still get DMed.
+- Log assertions for per-subscriber delivery failures are deliberately
+  NOT pinned to the ``mom_bot.main`` logger name (unlike the frozen #299
+  tests in ``tests/test_on_member_join.py``) because the officer-DM
+  helper may reasonably live in ``mom_bot.new_member_alerts`` instead of
+  inline in ``main.py``; only "some WARNING-or-higher record was
+  emitted" is asserted — the load-bearing assertion is that the *other*
+  subscribers still get DMed.
+
+Session-factory-reuse contract (fix 1 — resource-exhaustion review;
+mirrors the #300 branch's ``on_message``/``on_member_join`` fix)
+---------------------------------------------------------------------
+The officer-DM fan-out fires on every member join and must NOT build a
+fresh SQLAlchemy engine/connection pool (and, for Postgres, a fresh
+``ManagedIdentityCredential``) per join event. ``setup_hook`` is
+responsible for building ONE shared factory and storing it on
+``bot._db_session_factory`` (see the new ``setup_hook`` coverage in
+``tests/test_main_wireup.py``); ``on_member_join`` must reuse that
+attribute instead of calling ``mom_bot.main._build_session_factory``
+itself. Every test below that reaches the officer-DM step therefore:
+
+1. Sets ``bot._db_session_factory`` directly on the bot instance —
+   standing in for what ``setup_hook`` does in production — bypassing
+   ``setup_hook`` itself, which is out of scope for this file.
+2. Patches ``mom_bot.main._build_session_factory`` with
+   ``return_value=<the same factory>`` (so a not-yet-fixed
+   implementation that still builds its own factory inline continues to
+   work end-to-end and the *other* behavioural assertions stay green)
+   and additionally asserts ``assert_not_called()`` — this is the
+   load-bearing assertion for fix 1: an implementation that still calls
+   ``_build_session_factory`` from within ``on_member_join`` fails it,
+   independent of whether the DMs themselves went out correctly.
+
+Delivery-time permission check (fix 2)
+---------------------------------------
+Before DMing a resolved subscriber, the handler must re-check
+``officer.guild_permissions.manage_guild is True`` and skip (not DM, not
+error) a subscriber who no longer holds it — mirroring the
+``interaction.user.guild_permissions.manage_guild`` mock convention
+already used in ``tests/new_member_alerts/test_commands.py`` and
+``tests/member_notifications/test_commands.py``. ``_make_officer`` below
+grows a ``manage_guild`` keyword (default ``True``, matching the
+existing officers used across the rest of this file) so the new
+permission test can construct a subscriber lacking the permission
+without disturbing the other tests' fixtures.
+
+Missing-HTTPException-catch + welcome/officer-DM decoupling (fix 3)
+----------------------------------------------------------------------
+- Fix 3A: the officer-DM loop must catch ``discord.HTTPException`` (not
+  just ``discord.Forbidden``) per subscriber, so a transient
+  rate-limit/5xx from one ``officer.send()`` does not abort delivery to
+  the rest of the loop. Mirrors the existing Forbidden-does-not-block
+  test with a plain ``discord.HTTPException`` side effect instead.
+- Fix 3B: the welcome-channel path (#299) and the officer-DM fan-out are
+  independent notification paths past the shared bot/guild-scoping
+  gates at the top of the handler — a welcome-message failure (channel
+  not found, or a ``Forbidden``/``HTTPException`` on the welcome send)
+  must NOT prevent the officer-DM fan-out from running. Most tests in
+  this file still make the welcome-channel path fully succeed (a
+  working ``load_secret`` + ``get_channel`` returning a working
+  ``FakeChannel``) simply because that is the common case and is
+  orthogonal to what each test is asserting; the two decoupling tests
+  below deliberately fail the welcome-message path to prove the
+  officer-DM fan-out runs independently of it.
 """
 
 from __future__ import annotations
@@ -117,11 +151,15 @@ def _make_member(*, guild_id: int = _TARGET_GUILD_ID) -> MagicMock:
     return member
 
 
-def _make_officer(discord_id: int) -> MagicMock:
+def _make_officer(discord_id: int, *, manage_guild: bool = True) -> MagicMock:
     """Build a fake resolved officer target with a recorded async send.
 
     Args:
         discord_id: The officer's Discord snowflake.
+        manage_guild: Value for ``officer.guild_permissions.manage_guild``
+            (fix 2's delivery-time permission gate). Defaults to ``True``
+            so existing tests that don't care about the permission check
+            are unaffected.
 
     Returns:
         A MagicMock standing in for the resolved DM-sendable target
@@ -130,6 +168,7 @@ def _make_officer(discord_id: int) -> MagicMock:
     officer = MagicMock(spec=discord.Member)
     officer.id = discord_id
     officer.send = AsyncMock()
+    officer.guild_permissions.manage_guild = manage_guild
     return officer
 
 
@@ -162,6 +201,23 @@ def _make_forbidden() -> discord.Forbidden:
     response.status = 403
     response.reason = "Forbidden"
     return discord.Forbidden(response, "Missing Permissions")
+
+
+def _make_http_exception() -> discord.HTTPException:
+    """Build a real ``discord.HTTPException`` for use as a side effect.
+
+    Deliberately NOT a ``discord.Forbidden`` (which is already caught by
+    the pre-fix-3 implementation) — this represents the transient
+    rate-limit/5xx class of failure fix 3A adds a catch for.
+
+    Returns:
+        A constructed ``discord.HTTPException`` carrying a 503 mock
+        response, distinct in type from ``discord.Forbidden``.
+    """
+    response = MagicMock()
+    response.status = 503
+    response.reason = "Service Unavailable"
+    return discord.HTTPException(response, "Service Unavailable")
 
 
 def _make_session_factory() -> sessionmaker:
@@ -211,7 +267,12 @@ def _sent_message(send_mock: AsyncMock) -> str:
 
 @pytest.mark.asyncio
 async def test_on_member_join_dms_all_subscribed_officers() -> None:
-    """Every officer subscribed for the joining member's guild is DMed."""
+    """Every officer subscribed for the joining member's guild is DMed.
+
+    Also covers fix 1: the shared ``bot._db_session_factory`` must be
+    reused, and ``_build_session_factory`` must NOT be called from
+    within ``on_member_join``.
+    """
     from mom_bot.main import MomBot, build_intents
 
     factory = _make_session_factory()
@@ -220,6 +281,7 @@ async def test_on_member_join_dms_all_subscribed_officers() -> None:
     fake_channel = FakeChannel(_NEW_MEMBERS_CHANNEL_ID)
     bot = MomBot(intents=build_intents())
     bot.guild = discord.Object(id=_TARGET_GUILD_ID)
+    bot._db_session_factory = factory
     member = _make_member()
 
     officer_a = _make_officer(_OFFICER_A)
@@ -230,9 +292,14 @@ async def test_on_member_join_dms_all_subscribed_officers() -> None:
     with (
         patch("mom_bot.main.load_secret", side_effect=_fake_load_secret),
         patch.object(bot, "get_channel", return_value=fake_channel),
-        patch("mom_bot.main._build_session_factory", return_value=factory),
+        # return_value keeps a not-yet-fixed implementation (that still
+        # builds its own factory inline) fully functional end-to-end —
+        # assert_not_called() below is the load-bearing fix-1 assertion.
+        patch("mom_bot.main._build_session_factory", return_value=factory) as mock_build_factory,
     ):
         await bot.on_member_join(member)
+
+    mock_build_factory.assert_not_called()
 
     officer_a.send.assert_awaited_once()
     officer_b.send.assert_awaited_once()
@@ -246,7 +313,10 @@ async def test_on_member_join_dms_all_subscribed_officers() -> None:
 
 @pytest.mark.asyncio
 async def test_on_member_join_no_subscribers_sends_no_dms() -> None:
-    """No subscribed officers means no DM attempts and no crash."""
+    """No subscribed officers means no DM attempts and no crash.
+
+    Also covers fix 1's factory-reuse contract (see module docstring).
+    """
     from mom_bot.main import MomBot, build_intents
 
     factory = _make_session_factory()  # no subscriptions seeded
@@ -254,8 +324,51 @@ async def test_on_member_join_no_subscribers_sends_no_dms() -> None:
     fake_channel = FakeChannel(_NEW_MEMBERS_CHANNEL_ID)
     bot = MomBot(intents=build_intents())
     bot.guild = discord.Object(id=_TARGET_GUILD_ID)
+    bot._db_session_factory = factory
     member = _make_member()
     member.guild.get_member = MagicMock(return_value=None)
+
+    with (
+        patch("mom_bot.main.load_secret", side_effect=_fake_load_secret),
+        patch.object(bot, "get_channel", return_value=fake_channel),
+        patch("mom_bot.main._build_session_factory", return_value=factory) as mock_build_factory,
+    ):
+        await bot.on_member_join(member)  # must not raise
+
+    mock_build_factory.assert_not_called()
+    member.guild.get_member.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# Fix 2 — delivery-time manage_guild permission check
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_on_member_join_skips_officer_without_manage_guild_permission() -> None:
+    """A resolvable subscriber lacking manage_guild is skipped, not DMed.
+
+    ``officer_a`` is a current, resolvable guild member (per
+    ``member.guild.get_member``) but has lost ``manage_guild`` — the
+    handler must re-check the permission at delivery time and skip them
+    without DMing or erroring. ``officer_b`` still holds the permission
+    and must still be DMed.
+    """
+    from mom_bot.main import MomBot, build_intents
+
+    factory = _make_session_factory()
+    _seed_subscribers(factory, _TARGET_GUILD_ID, _OFFICER_A, _OFFICER_B)
+
+    fake_channel = FakeChannel(_NEW_MEMBERS_CHANNEL_ID)
+    bot = MomBot(intents=build_intents())
+    bot.guild = discord.Object(id=_TARGET_GUILD_ID)
+    bot._db_session_factory = factory
+    member = _make_member()
+
+    officer_a = _make_officer(_OFFICER_A, manage_guild=False)
+    officer_b = _make_officer(_OFFICER_B, manage_guild=True)
+    officers = {_OFFICER_A: officer_a, _OFFICER_B: officer_b}
+    member.guild.get_member = MagicMock(side_effect=lambda uid: officers.get(uid))
 
     with (
         patch("mom_bot.main.load_secret", side_effect=_fake_load_secret),
@@ -264,7 +377,8 @@ async def test_on_member_join_no_subscribers_sends_no_dms() -> None:
     ):
         await bot.on_member_join(member)  # must not raise
 
-    member.guild.get_member.assert_not_called()
+    officer_a.send.assert_not_awaited()
+    officer_b.send.assert_awaited_once()
 
 
 # ---------------------------------------------------------------------------
@@ -285,6 +399,7 @@ async def test_on_member_join_forbidden_for_one_subscriber_does_not_block_others
     fake_channel = FakeChannel(_NEW_MEMBERS_CHANNEL_ID)
     bot = MomBot(intents=build_intents())
     bot.guild = discord.Object(id=_TARGET_GUILD_ID)
+    bot._db_session_factory = factory
     member = _make_member()
 
     officer_a = _make_officer(_OFFICER_A)
@@ -310,6 +425,129 @@ async def test_on_member_join_forbidden_for_one_subscriber_does_not_block_others
         "Expected a WARNING-or-higher log record when a subscriber's DM "
         "delivery fails with discord.Forbidden."
     )
+
+
+# ---------------------------------------------------------------------------
+# Fix 3A — one subscriber's HTTPException doesn't stop the others either
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_on_member_join_http_exception_for_one_subscriber_does_not_block_others(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A discord.HTTPException for one subscriber must not stop the others'
+    DMs — mirrors the Forbidden test above but with the broader exception
+    type fix 3A adds a catch for (a plain HTTPException, not a
+    Forbidden — Forbidden is already caught pre-fix)."""
+    from mom_bot.main import MomBot, build_intents
+
+    factory = _make_session_factory()
+    _seed_subscribers(factory, _TARGET_GUILD_ID, _OFFICER_A, _OFFICER_B, _OFFICER_C)
+
+    fake_channel = FakeChannel(_NEW_MEMBERS_CHANNEL_ID)
+    bot = MomBot(intents=build_intents())
+    bot.guild = discord.Object(id=_TARGET_GUILD_ID)
+    bot._db_session_factory = factory
+    member = _make_member()
+
+    officer_a = _make_officer(_OFFICER_A)
+    officer_b = _make_officer(_OFFICER_B)
+    officer_b.send.side_effect = _make_http_exception()
+    officer_c = _make_officer(_OFFICER_C)
+    officers = {_OFFICER_A: officer_a, _OFFICER_B: officer_b, _OFFICER_C: officer_c}
+    member.guild.get_member = MagicMock(side_effect=lambda uid: officers.get(uid))
+
+    with caplog.at_level(logging.WARNING):
+        with (
+            patch("mom_bot.main.load_secret", side_effect=_fake_load_secret),
+            patch.object(bot, "get_channel", return_value=fake_channel),
+            patch("mom_bot.main._build_session_factory", return_value=factory),
+        ):
+            await bot.on_member_join(member)  # must not raise
+
+    officer_a.send.assert_awaited_once()
+    officer_b.send.assert_awaited_once()  # attempted, even though it raised
+    officer_c.send.assert_awaited_once()
+
+    assert any(r.levelno >= logging.WARNING for r in caplog.records), (
+        "Expected a WARNING-or-higher log record when a subscriber's DM "
+        "delivery fails with discord.HTTPException."
+    )
+
+
+# ---------------------------------------------------------------------------
+# Fix 3B — welcome-message failure must not block the officer-DM fan-out
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_on_member_join_welcome_channel_not_found_still_dms_officers() -> None:
+    """A missing welcome channel must not prevent officer DMs.
+
+    ``get_channel`` returning ``None`` is the "channel not found"
+    early-return path in the welcome-message logic. That failure is
+    independent of the officer-DM fan-out per fix 3B — subscribed
+    officers must still be DMed.
+    """
+    from mom_bot.main import MomBot, build_intents
+
+    factory = _make_session_factory()
+    _seed_subscribers(factory, _TARGET_GUILD_ID, _OFFICER_A, _OFFICER_B)
+
+    bot = MomBot(intents=build_intents())
+    bot.guild = discord.Object(id=_TARGET_GUILD_ID)
+    bot._db_session_factory = factory
+    member = _make_member()
+
+    officer_a = _make_officer(_OFFICER_A)
+    officer_b = _make_officer(_OFFICER_B)
+    officers = {_OFFICER_A: officer_a, _OFFICER_B: officer_b}
+    member.guild.get_member = MagicMock(side_effect=lambda uid: officers.get(uid))
+
+    with (
+        patch("mom_bot.main.load_secret", side_effect=_fake_load_secret),
+        patch.object(bot, "get_channel", return_value=None),  # channel not found
+        patch("mom_bot.main._build_session_factory", return_value=factory),
+    ):
+        await bot.on_member_join(member)  # must not raise
+
+    officer_a.send.assert_awaited_once()
+    officer_b.send.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_on_member_join_welcome_send_forbidden_still_dms_officers() -> None:
+    """A Forbidden welcome-message send must not prevent officer DMs.
+
+    Distinct from the channel-not-found case above: here ``get_channel``
+    resolves to a real channel, but the welcome ``channel.send(...)``
+    call itself raises ``discord.Forbidden``. Per fix 3B this must not
+    block the independent officer-DM fan-out.
+    """
+    from mom_bot.main import MomBot, build_intents
+
+    factory = _make_session_factory()
+    _seed_subscribers(factory, _TARGET_GUILD_ID, _OFFICER_A)
+
+    fake_channel = FakeChannel(_NEW_MEMBERS_CHANNEL_ID)
+    fake_channel.send.side_effect = _make_forbidden()
+    bot = MomBot(intents=build_intents())
+    bot.guild = discord.Object(id=_TARGET_GUILD_ID)
+    bot._db_session_factory = factory
+    member = _make_member()
+
+    officer_a = _make_officer(_OFFICER_A)
+    member.guild.get_member = MagicMock(return_value=officer_a)
+
+    with (
+        patch("mom_bot.main.load_secret", side_effect=_fake_load_secret),
+        patch.object(bot, "get_channel", return_value=fake_channel),
+        patch("mom_bot.main._build_session_factory", return_value=factory),
+    ):
+        await bot.on_member_join(member)  # must not raise
+
+    officer_a.send.assert_awaited_once()
 
 
 # ---------------------------------------------------------------------------
