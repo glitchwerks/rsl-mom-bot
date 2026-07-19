@@ -7,19 +7,35 @@ independent slice of coverage for the auto-kick feature's join-persistence
 requirement without touching that frozen file.
 
 Mocking conventions mirror ``tests/test_on_member_join.py`` exactly
-(``FakeChannel``, ``_make_member``, patching ``mom_bot.main.load_secret``)
-plus the ``mom_bot.main._build_session_factory`` patching convention from
-``tests/test_main_wireup.py`` (in-memory SQLite + ``Base.metadata.create_all``,
-no Alembic).
+(``FakeChannel``, ``_make_member``, patching ``mom_bot.main.load_secret``).
+
+Session-factory-reuse contract (#300 fix 1 — resource-exhaustion review)
+--------------------------------------------------------------------------
+``on_member_join`` fires on every guild join and must NOT build a fresh
+SQLAlchemy engine/connection pool per event — a raid or invite-spam burst
+would otherwise construct one engine per join. ``setup_hook`` is now
+responsible for building ONE shared factory and storing it on
+``bot._db_session_factory``; ``on_member_join``'s join-tracking call must
+reuse that attribute instead of calling
+``mom_bot.main._build_session_factory`` itself. Every test below therefore:
+
+1. Sets ``bot._db_session_factory`` directly (bypassing ``setup_hook``,
+   which is out of scope for this file — see ``tests/test_main_wireup.py``
+   for the ``setup_hook``-builds-it-once contract).
+2. Patches ``mom_bot.main._build_session_factory`` with a plain
+   ``MagicMock`` (no ``return_value`` needed since it must never be
+   called) and asserts ``assert_not_called()`` after the handler runs —
+   proving ``on_member_join`` reused the pre-built factory rather than
+   constructing a new one.
 
 Binding contract decisions:
 
-- Join tracking is recorded via ``mom_bot.main._build_session_factory()``
-  (patchable exactly like every other DB-touching handler in ``main.py`` —
-  ``_start_reminders_after_ready``, ``on_ready``, ``_start_sidecar``).
-  Assertions query the ``member_activity`` table directly rather than
-  mocking a service call, per the frozen-contract guidance to assert
-  observable behaviour, not internal structure.
+- Join tracking is recorded via the session factory the handler is given
+  (now ``bot._db_session_factory`` per fix 1 above, previously a per-call
+  ``mom_bot.main._build_session_factory()`` invocation).  Assertions query
+  the ``member_activity`` table directly rather than mocking a service
+  call, per the frozen-contract guidance to assert observable behaviour,
+  not internal structure.
 - Join tracking is scoped to the target guild (``bot.guild``) and skips
   bot accounts — the SAME early-return guards ``on_member_join`` already
   has for the welcome message (bot check first, then guild-match check).
@@ -113,6 +129,15 @@ def _make_session_factory(engine: Any) -> Any:
     return sessionmaker(bind=engine)
 
 
+def _bind_session_factory(bot: Any, session_factory: Any) -> None:
+    """Attach a pre-built factory the handler must reuse, not rebuild.
+
+    Stands in for what ``setup_hook`` does in production (#300 fix 1):
+    build the session factory once and store it on the bot instance.
+    """
+    bot._db_session_factory = session_factory
+
+
 # ---------------------------------------------------------------------------
 # Test 1 — human join in target guild persists a tracking row
 # ---------------------------------------------------------------------------
@@ -131,14 +156,17 @@ async def test_human_join_persists_member_activity_row() -> None:
     fake_channel = FakeChannel(_NEW_MEMBERS_CHANNEL_ID)
     bot = MomBot(intents=build_intents())
     bot.guild = discord.Object(id=_TARGET_GUILD_ID)
+    _bind_session_factory(bot, session_factory)
     member = _make_member(is_bot=False, guild_id=_TARGET_GUILD_ID)
 
     with (
         patch("mom_bot.main.load_secret", side_effect=_fake_load_secret),
         patch.object(bot, "get_channel", return_value=fake_channel),
-        patch("mom_bot.main._build_session_factory", return_value=session_factory),
+        patch("mom_bot.main._build_session_factory") as mock_build_factory,
     ):
         await bot.on_member_join(member)
+
+    mock_build_factory.assert_not_called()
 
     with Session(engine) as session:
         rows = session.query(MemberActivity).filter_by(member_id=_MEMBER_ID).all()
@@ -170,14 +198,17 @@ async def test_bot_account_join_is_not_tracked() -> None:
     fake_channel = FakeChannel(_NEW_MEMBERS_CHANNEL_ID)
     bot = MomBot(intents=build_intents())
     bot.guild = discord.Object(id=_TARGET_GUILD_ID)
+    _bind_session_factory(bot, session_factory)
     member = _make_member(is_bot=True, guild_id=_TARGET_GUILD_ID)
 
     with (
         patch("mom_bot.main.load_secret", side_effect=_fake_load_secret),
         patch.object(bot, "get_channel", return_value=fake_channel),
-        patch("mom_bot.main._build_session_factory", return_value=session_factory),
+        patch("mom_bot.main._build_session_factory") as mock_build_factory,
     ):
         await bot.on_member_join(member)
+
+    mock_build_factory.assert_not_called()
 
     with Session(engine) as session:
         count = session.query(MemberActivity).filter_by(member_id=_MEMBER_ID).count()
@@ -205,14 +236,17 @@ async def test_guild_mismatched_join_is_not_tracked() -> None:
     fake_channel = FakeChannel(_NEW_MEMBERS_CHANNEL_ID)
     bot = MomBot(intents=build_intents())
     bot.guild = discord.Object(id=_TARGET_GUILD_ID)
+    _bind_session_factory(bot, session_factory)
     member = _make_member(is_bot=False, guild_id=_OTHER_GUILD_ID)
 
     with (
         patch("mom_bot.main.load_secret", side_effect=_fake_load_secret),
         patch.object(bot, "get_channel", return_value=fake_channel),
-        patch("mom_bot.main._build_session_factory", return_value=session_factory),
+        patch("mom_bot.main._build_session_factory") as mock_build_factory,
     ):
         await bot.on_member_join(member)
+
+    mock_build_factory.assert_not_called()
 
     with Session(engine) as session:
         count = session.query(MemberActivity).filter_by(member_id=_MEMBER_ID).count()
@@ -240,14 +274,17 @@ async def test_join_before_target_guild_configured_is_not_tracked() -> None:
     fake_channel = FakeChannel(_NEW_MEMBERS_CHANNEL_ID)
     bot = MomBot(intents=build_intents())
     bot.guild = None
+    _bind_session_factory(bot, session_factory)
     member = _make_member(is_bot=False)
 
     with (
         patch("mom_bot.main.load_secret", side_effect=_fake_load_secret),
         patch.object(bot, "get_channel", return_value=fake_channel),
-        patch("mom_bot.main._build_session_factory", return_value=session_factory),
+        patch("mom_bot.main._build_session_factory") as mock_build_factory,
     ):
         await bot.on_member_join(member)
+
+    mock_build_factory.assert_not_called()
 
     with Session(engine) as session:
         count = session.query(MemberActivity).filter_by(member_id=_MEMBER_ID).count()

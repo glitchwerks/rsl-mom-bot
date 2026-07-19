@@ -122,8 +122,9 @@ class MomBot(discord.Client):
         tree: The slash-command tree bound to this client instance.
         guild: The target guild as a :class:`discord.Object`; populated by
             :meth:`setup_hook` after ``guild-id`` is resolved from Key Vault.
-        _db_session_factory: The shared SQLAlchemy session factory used by
-            command services and event handlers.
+        _db_session_factory: Shared SQLAlchemy session factory built once
+            during :meth:`setup_hook` and reused by command services and
+            gateway event handlers.
         _reminder_task: The asyncio task running the reminder scheduler;
             stored to prevent garbage collection.
         _auto_kick_task: The asyncio task running the inactive-member sweep;
@@ -157,7 +158,7 @@ SiegeWebClient` instance registered via :func:`make_client`; stored so
         super().__init__(intents=intents)
         self.tree: app_commands.CommandTree = app_commands.CommandTree(self)
         self.guild: discord.Object | None = None
-        self._db_session_factory: sessionmaker[Session]
+        self._db_session_factory: sessionmaker[Session] | None = None
         self._reminder_task: asyncio.Task[None] | None = None
         self._auto_kick_task: asyncio.Task[None] | None = None
         self._health_runner: web.AppRunner | None = None
@@ -408,7 +409,10 @@ SiegeWebClient` instance registered via :func:`make_client`; stored so
             return
 
         try:
-            activity_service = MemberActivityService(self._db_session_factory)
+            factory = self._db_session_factory
+            if factory is None:
+                raise RuntimeError("Database session factory is not initialized")
+            activity_service = MemberActivityService(factory)
             joined_at = datetime.datetime.now(datetime.UTC).replace(tzinfo=None)
             activity_service.record_join(member.guild.id, member.id, joined_at)
         except Exception:
@@ -520,7 +524,9 @@ SiegeWebClient` instance registered via :func:`make_client`; stored so
         if self.guild is None or message.guild.id != self.guild.id:
             return
 
-        factory = _build_session_factory(_resolve_db_url())
+        factory = self._db_session_factory
+        if factory is None:
+            raise RuntimeError("Database session factory is not initialized")
         activity_service = MemberActivityService(factory)
         message_at = message.created_at.astimezone(datetime.UTC).replace(tzinfo=None)
         activity_service.record_first_message(

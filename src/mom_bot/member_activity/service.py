@@ -121,6 +121,28 @@ class MemberActivityService:
             session.expunge_all()
             return list(rows)
 
+    def get_tracking(self, guild_id: int, member_id: int) -> MemberActivity | None:
+        """Return the current tracking row for a guild member, if any.
+
+        Args:
+            guild_id: Discord guild snowflake.
+            member_id: Discord member snowflake.
+
+        Returns:
+            A detached activity row reflecting the current stored state, or
+            ``None`` if no tracking row exists.
+        """
+        with self._session_factory() as session:
+            row = session.execute(
+                select(MemberActivity).where(
+                    MemberActivity.guild_id == guild_id,
+                    MemberActivity.member_id == member_id,
+                )
+            ).scalar_one_or_none()
+            if row is not None:
+                session.expunge(row)
+            return row
+
     def remove_tracking(self, guild_id: int, member_id: int) -> None:
         """Delete a member's tracking row if one exists.
 

@@ -93,19 +93,31 @@ class AutoKickScheduler:
         Raises:
             asyncio.CancelledError: Propagated when the task is cancelled.
         """
-        try:
-            member = self._guild.get_member(activity.member_id)
-            if member is None:
-                try:
-                    member = await self._guild.fetch_member(activity.member_id)
-                except discord.NotFound:
-                    _logger.info(
-                        "auto-kick: member %d already left guild %d",
-                        activity.member_id,
-                        activity.guild_id,
-                    )
-                    return
+        member = self._guild.get_member(activity.member_id)
+        if member is None:
+            try:
+                member = await self._guild.fetch_member(activity.member_id)
+            except asyncio.CancelledError:
+                raise
+            except discord.NotFound:
+                _logger.info(
+                    "auto-kick: member %d already left guild %d",
+                    activity.member_id,
+                    activity.guild_id,
+                )
+                self._safe_remove_tracking(activity.guild_id, activity.member_id)
+                return
+            except (discord.Forbidden, discord.HTTPException):
+                _logger.warning(
+                    "auto-kick: transient fetch failure for member %d in guild %d; "
+                    "will retry on next sweep",
+                    activity.member_id,
+                    activity.guild_id,
+                    exc_info=True,
+                )
+                return
 
+        try:
             try:
                 await member.send(_DM_MESSAGE)
             except asyncio.CancelledError:
@@ -117,6 +129,22 @@ class AutoKickScheduler:
                     exc_info=True,
                 )
 
+            current_activity = self._service.get_tracking(
+                activity.guild_id,
+                activity.member_id,
+            )
+            if (
+                current_activity is None
+                or current_activity.first_message_at is not None
+                or current_activity.joined_at != activity.joined_at
+            ):
+                _logger.info(
+                    "auto-kick: skipped kick for member %d in guild %d due to state change",
+                    activity.member_id,
+                    activity.guild_id,
+                )
+                return
+
             await member.kick(reason=_KICK_REASON)
             _logger.info(
                 "auto-kick: kicked member %d from guild %d; reason=%s",
@@ -124,6 +152,7 @@ class AutoKickScheduler:
                 activity.guild_id,
                 _KICK_REASON,
             )
+            self._safe_remove_tracking(activity.guild_id, activity.member_id)
         except asyncio.CancelledError:
             raise
         except Exception:
@@ -132,5 +161,22 @@ class AutoKickScheduler:
                 activity.member_id,
                 activity.guild_id,
             )
-        finally:
-            self._service.remove_tracking(activity.guild_id, activity.member_id)
+            self._safe_remove_tracking(activity.guild_id, activity.member_id)
+
+    def _safe_remove_tracking(self, guild_id: int, member_id: int) -> None:
+        """Remove a tracking row without propagating cleanup failures.
+
+        Args:
+            guild_id: Discord guild snowflake.
+            member_id: Discord member snowflake.
+        """
+        try:
+            self._service.remove_tracking(guild_id, member_id)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            _logger.exception(
+                "auto-kick: failed to remove tracking for member %d in guild %d",
+                member_id,
+                guild_id,
+            )

@@ -229,11 +229,12 @@ async def test_setup_hook_returns_promptly_without_gateway() -> None:
 
 # ---------------------------------------------------------------------------
 # Test 0b — setup_hook builds the shared session factory exactly once
-# (#301 fix 1: on_member_join's officer-DM fan-out must reuse it, not
-# rebuild per join event; mirrors the #300 branch's identical fix for
-# on_message/on_member_join — see
-# tests/test_on_member_join_officer_alerts.py for the consumer-side
-# contract)
+# (#300 fix 1: on_message/on_member_join must reuse it, not rebuild per
+# event; see tests/test_on_message.py and
+# tests/test_on_member_join_activity_tracking.py. #301 fix 1 applies the
+# same discipline to on_member_join's officer-DM fan-out — see
+# tests/test_on_member_join_officer_alerts.py for that consumer-side
+# contract.)
 # ---------------------------------------------------------------------------
 
 
@@ -243,14 +244,13 @@ async def test_setup_hook_builds_session_factory_once_and_stores_it() -> None:
 
     Building a fresh SQLAlchemy engine/connection pool (and, for Postgres, a
     fresh ``ManagedIdentityCredential``) per Discord event is a
-    resource-exhaustion risk under a burst of member joins (#301 fix 1).
-    setup_hook already builds a factory once for the member-notify/
-    new-member-alert command registration (``_mn_factory`` internally) —
-    this test locks in that it is stored on ``bot._db_session_factory`` so
-    ``on_member_join``'s officer-DM fan-out can reuse the same factory
-    instead of building its own per join event.
+    resource-exhaustion risk under bursty events (#300 fix 1, #301 fix 1).
+    setup_hook is the correct startup-time place to build the shared factory
+    exactly once and store it on ``bot._db_session_factory`` for
+    ``on_message``, ``on_member_join``'s activity tracking, and
+    ``on_member_join``'s officer-DM fan-out to all reuse.
 
-    This test does not touch ``on_ready``'s or
+    This test does not touch ``on_ready``'s, ``_start_sidecar``'s, or
     ``_start_reminders_after_ready``'s own per-call factory builds — those
     remain legitimately low-frequency/startup-time and are out of scope for
     this fix.

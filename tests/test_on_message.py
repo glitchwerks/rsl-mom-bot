@@ -6,10 +6,30 @@ the gateway), so calling ``bot.on_message(...)`` before this feature lands
 raises ``AttributeError`` — that is the expected red, not a fixture bug.
 
 Design mirrors ``tests/test_on_member_join_activity_tracking.py`` (same
-``mom_bot.main._build_session_factory`` patching convention, in-memory
-SQLite + ``Base.metadata.create_all``) and
-``tests/test_on_member_join.py`` (same guild-scoping guard style: bot check,
-then guild-match check, before any DB work).
+session-factory-reuse convention, in-memory SQLite +
+``Base.metadata.create_all``) and ``tests/test_on_member_join.py`` (same
+guild-scoping guard style: bot check, then guild-match check, before any DB
+work).
+
+Session-factory-reuse contract (#300 fix 1 — resource-exhaustion review)
+--------------------------------------------------------------------------
+``on_message`` fires on every Discord message and must NOT build a fresh
+SQLAlchemy engine/connection pool (and, for Postgres, a fresh
+``ManagedIdentityCredential``) per event — a bursty raid or invite-spam
+event would otherwise construct one engine per message. ``setup_hook`` is
+now responsible for building ONE shared factory and storing it on
+``bot._db_session_factory``; ``on_message`` must reuse that attribute
+instead of calling ``mom_bot.main._build_session_factory`` itself. Every
+test below therefore:
+
+1. Sets ``bot._db_session_factory`` directly (bypassing ``setup_hook``,
+   which is out of scope for this file — see ``tests/test_main_wireup.py``
+   for the ``setup_hook``-builds-it-once contract).
+2. Patches ``mom_bot.main._build_session_factory`` with a plain
+   ``MagicMock`` (no ``return_value`` needed since it must never be
+   called) and asserts ``assert_not_called()`` after the handler runs —
+   proving ``on_message`` reused the pre-built factory rather than
+   constructing a new one.
 
 Binding contract decisions:
 
@@ -72,6 +92,15 @@ def _make_engine() -> Any:
 def _make_session_factory(engine: Any) -> Any:
     """Return a sessionmaker bound to the given engine."""
     return sessionmaker(bind=engine)
+
+
+def _bind_session_factory(bot: Any, session_factory: Any) -> None:
+    """Attach a pre-built factory the handler must reuse, not rebuild.
+
+    Stands in for what ``setup_hook`` does in production (#300 fix 1):
+    build the session factory once and store it on the bot instance.
+    """
+    bot._db_session_factory = session_factory
 
 
 def _seed_join(
@@ -149,11 +178,13 @@ async def test_member_message_records_first_activity() -> None:
 
     bot = MomBot(intents=build_intents())
     bot.guild = discord.Object(id=_TARGET_GUILD_ID)
+    _bind_session_factory(bot, session_factory)
     message = _make_message(author_is_bot=False, guild_id=_TARGET_GUILD_ID)
 
-    with patch("mom_bot.main._build_session_factory", return_value=session_factory):
+    with patch("mom_bot.main._build_session_factory") as mock_build_factory:
         await bot.on_message(message)
 
+    mock_build_factory.assert_not_called()
     assert _get_first_message_at(engine) is not None
     assert _get_first_message_at(engine) != "NO_ROW"
 
@@ -174,17 +205,19 @@ async def test_second_message_does_not_change_first_message_at() -> None:
 
     bot = MomBot(intents=build_intents())
     bot.guild = discord.Object(id=_TARGET_GUILD_ID)
+    _bind_session_factory(bot, session_factory)
 
     first_at = datetime.datetime(2026, 7, 19, 1, 0, 0, tzinfo=datetime.UTC)
     second_at = datetime.datetime(2026, 7, 19, 5, 0, 0, tzinfo=datetime.UTC)
 
-    with patch("mom_bot.main._build_session_factory", return_value=session_factory):
+    with patch("mom_bot.main._build_session_factory") as mock_build_factory:
         await bot.on_message(_make_message(guild_id=_TARGET_GUILD_ID, created_at=first_at))
         recorded_after_first = _get_first_message_at(engine)
 
         await bot.on_message(_make_message(guild_id=_TARGET_GUILD_ID, created_at=second_at))
         recorded_after_second = _get_first_message_at(engine)
 
+    mock_build_factory.assert_not_called()
     assert recorded_after_first == recorded_after_second, (
         "Expected first_message_at to remain unchanged after a second "
         f"message; got {recorded_after_first!r} then {recorded_after_second!r}"
@@ -207,11 +240,13 @@ async def test_bot_own_message_is_ignored() -> None:
 
     bot = MomBot(intents=build_intents())
     bot.guild = discord.Object(id=_TARGET_GUILD_ID)
+    _bind_session_factory(bot, session_factory)
     message = _make_message(author_is_bot=True, guild_id=_TARGET_GUILD_ID)
 
-    with patch("mom_bot.main._build_session_factory", return_value=session_factory):
+    with patch("mom_bot.main._build_session_factory") as mock_build_factory:
         await bot.on_message(message)
 
+    mock_build_factory.assert_not_called()
     assert (
         _get_first_message_at(engine) is None
     ), "A bot-authored message must not mark the tracked member active"
@@ -233,11 +268,13 @@ async def test_dm_message_is_ignored_without_crashing() -> None:
 
     bot = MomBot(intents=build_intents())
     bot.guild = discord.Object(id=_TARGET_GUILD_ID)
+    _bind_session_factory(bot, session_factory)
     message = _make_message(guild_id=None)
 
-    with patch("mom_bot.main._build_session_factory", return_value=session_factory):
+    with patch("mom_bot.main._build_session_factory") as mock_build_factory:
         await bot.on_message(message)  # must not raise
 
+    mock_build_factory.assert_not_called()
     assert _get_first_message_at(engine) is None
 
 
@@ -257,11 +294,13 @@ async def test_message_in_non_target_guild_is_ignored() -> None:
 
     bot = MomBot(intents=build_intents())
     bot.guild = discord.Object(id=_TARGET_GUILD_ID)
+    _bind_session_factory(bot, session_factory)
     message = _make_message(guild_id=_OTHER_GUILD_ID)
 
-    with patch("mom_bot.main._build_session_factory", return_value=session_factory):
+    with patch("mom_bot.main._build_session_factory") as mock_build_factory:
         await bot.on_message(message)
 
+    mock_build_factory.assert_not_called()
     assert _get_first_message_at(engine) is None
 
 
@@ -281,9 +320,11 @@ async def test_message_before_target_guild_configured_is_ignored() -> None:
 
     bot = MomBot(intents=build_intents())
     bot.guild = None
+    _bind_session_factory(bot, session_factory)
     message = _make_message(guild_id=_TARGET_GUILD_ID)
 
-    with patch("mom_bot.main._build_session_factory", return_value=session_factory):
+    with patch("mom_bot.main._build_session_factory") as mock_build_factory:
         await bot.on_message(message)
 
+    mock_build_factory.assert_not_called()
     assert _get_first_message_at(engine) is None

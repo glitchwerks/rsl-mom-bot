@@ -57,7 +57,9 @@ from unittest.mock import AsyncMock, MagicMock
 import discord
 import pytest
 import time_machine
-from sqlalchemy import create_engine
+from mom_bot.member_activity.models import MemberActivity
+from mom_bot.member_activity.service import MemberActivityService
+from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session, sessionmaker
 
 from mom_bot.db import Base
@@ -490,3 +492,235 @@ async def test_kick_success_is_logged(caplog: pytest.LogCaptureFixture) -> None:
         "mom_bot.member_activity.scheduler after a successful kick, but "
         "none was emitted."
     )
+
+
+# ---------------------------------------------------------------------------
+# Test J — race A: a message posted during the DM window cancels the kick
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_message_during_dm_window_prevents_kick() -> None:
+    """A first message posted while the DM is in flight must cancel the kick.
+
+    ``list_stale()`` hands the scheduler a detached snapshot. If the member
+    posts their first message (``on_message`` commits ``first_message_at``)
+    while the scheduler is awaiting DM delivery for that same member, the
+    scheduler must re-verify eligibility before kicking rather than acting
+    on the stale snapshot (#300 race A).
+    """
+    engine = _make_engine()
+    _seed_member(engine, joined_at=_JOINED_25H_AGO)
+    service = MemberActivityService(_make_session_factory(engine))
+
+    async def _post_message_during_dm(*args: Any, **kwargs: Any) -> None:
+        # Simulates on_message committing first_message_at concurrently
+        # with the scheduler's in-flight DM for this same member.
+        service.record_first_message(_GUILD_ID, _MEMBER_ID, _NOW.replace(tzinfo=None))
+
+    member = FakeMember(_MEMBER_ID)
+    member.send.side_effect = _post_message_during_dm
+    guild = FakeGuild()
+    guild.add_member(member)
+    bot = FakeBot(ready=True)
+    scheduler = _make_scheduler(bot, guild, engine)
+
+    with time_machine.travel(_NOW, tick=False):
+        await _run_for(scheduler.run, 0.12)
+
+    member.send.assert_called_once()
+    member.kick.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# Test K — race B: a rejoin during the DM window cancels the kick and
+# preserves the freshly-rejoined row
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_rejoin_during_dm_window_prevents_kick_and_preserves_new_row() -> None:
+    """A rejoin during the DM window must cancel the stale kick.
+
+    ``record_join`` overwrites ``joined_at`` (and clears
+    ``first_message_at``) on rejoin. If a member leaves and rejoins while
+    the scheduler is mid-sweep on their OLD snapshot, the scheduler must not
+    kick based on that stale snapshot, and must not delete the freshly
+    rejoined tracking row (#300 race B).
+    """
+    engine = _make_engine()
+    _seed_member(engine, joined_at=_JOINED_25H_AGO)
+    service = MemberActivityService(_make_session_factory(engine))
+    rejoined_at = _NOW.replace(tzinfo=None)
+
+    async def _rejoin_during_dm(*args: Any, **kwargs: Any) -> None:
+        # Simulates on_member_join's record_join overwriting joined_at for
+        # a leave+rejoin during the DM/kick window for the SAME row.
+        service.record_join(_GUILD_ID, _MEMBER_ID, rejoined_at)
+
+    member = FakeMember(_MEMBER_ID)
+    member.send.side_effect = _rejoin_during_dm
+    guild = FakeGuild()
+    guild.add_member(member)
+    bot = FakeBot(ready=True)
+    scheduler = _make_scheduler(bot, guild, engine)
+
+    with time_machine.travel(_NOW, tick=False):
+        await _run_for(scheduler.run, 0.12)
+
+    member.send.assert_called_once()
+    member.kick.assert_not_called()
+
+    with Session(engine) as session:
+        row = session.execute(
+            select(MemberActivity).where(
+                MemberActivity.guild_id == _GUILD_ID,
+                MemberActivity.member_id == _MEMBER_ID,
+            )
+        ).scalar_one_or_none()
+    assert row is not None, "Rejoined row must not be deleted by the stale sweep"
+    assert row.joined_at == rejoined_at, "Rejoined row's joined_at must be untouched"
+    assert row.first_message_at is None
+
+
+# ---------------------------------------------------------------------------
+# Test L — cleanup failure must not crash _process_member (fix 3)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_cleanup_failure_does_not_crash_process_member() -> None:
+    """A ``remove_tracking`` failure in the finally block must not propagate.
+
+    The kick itself must still have been attempted -- only the terminal
+    cleanup call is failing (#300 fix 3).
+    """
+    engine = _make_engine()
+    _seed_member(engine, joined_at=_JOINED_25H_AGO)
+
+    member = FakeMember(_MEMBER_ID)
+    guild = FakeGuild()
+    guild.add_member(member)
+    bot = FakeBot(ready=True)
+    scheduler = _make_scheduler(bot, guild, engine)
+
+    with time_machine.travel(_NOW, tick=False):
+        stale = scheduler._service.list_stale(_NOW.replace(tzinfo=None))
+        assert len(stale) == 1
+        activity = stale[0]
+
+        scheduler._service.remove_tracking = MagicMock(side_effect=RuntimeError("db unavailable"))
+
+        # Must not raise -- a cleanup failure is not the caller's problem.
+        await scheduler._process_member(activity)
+
+    member.kick.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# Test M — cleanup failure for one member must not block the next member in
+# the same tick (fix 3)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_cleanup_failure_does_not_block_next_stale_member_same_tick() -> None:
+    """A ``remove_tracking`` failure must not kill the ``run()`` sweep loop.
+
+    Both stale members must still be processed in the same tick even though
+    cleanup raises for every member processed (#300 fix 3).
+    """
+    engine = _make_engine()
+    _seed_member(engine, member_id=_MEMBER_ID, joined_at=_JOINED_25H_AGO)
+    _seed_member(engine, member_id=_SECOND_MEMBER_ID, joined_at=_JOINED_25H_AGO)
+
+    first_member = FakeMember(_MEMBER_ID)
+    second_member = FakeMember(_SECOND_MEMBER_ID)
+    guild = FakeGuild()
+    guild.add_member(first_member)
+    guild.add_member(second_member)
+    bot = FakeBot(ready=True)
+    scheduler = _make_scheduler(bot, guild, engine, tick_seconds=0.05)
+    scheduler._service.remove_tracking = MagicMock(side_effect=RuntimeError("db unavailable"))
+
+    # Confined to a single tick (duration < tick_seconds): remove_tracking
+    # never actually deletes the rows in this test (it always raises), so a
+    # second tick would find both members still stale and kick them again --
+    # that would be a correct consequence of fix 3, not a failure of it, and
+    # would make a call_count-based assertion tick-count-dependent.
+    with time_machine.travel(_NOW, tick=False):
+        await _run_for(scheduler.run, 0.03)
+
+    first_member.kick.assert_called_once()
+    second_member.kick.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# Test N — a transient Forbidden from fetch_member must not remove tracking
+# (fix 4)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_fetch_member_forbidden_does_not_remove_tracking() -> None:
+    """A transient ``discord.Forbidden`` from ``fetch_member`` must be retried.
+
+    Unlike ``discord.NotFound`` (the member genuinely left), a transient
+    permission/network blip must leave the tracking row intact so the next
+    sweep tick retries the member instead of permanently exempting them
+    (#300 fix 4).
+    """
+    engine = _make_engine()
+    _seed_member(engine, joined_at=_JOINED_25H_AGO)
+
+    guild = FakeGuild()  # member never registered -> get_member() misses
+    guild.set_fetch_side_effect(_MEMBER_ID, _make_forbidden())
+    bot = FakeBot(ready=True)
+    scheduler = _make_scheduler(bot, guild, engine)
+
+    with time_machine.travel(_NOW, tick=False):
+        await _run_for(scheduler.run, 0.12)
+
+    with Session(engine) as session:
+        row = session.execute(
+            select(MemberActivity).where(
+                MemberActivity.guild_id == _GUILD_ID,
+                MemberActivity.member_id == _MEMBER_ID,
+            )
+        ).scalar_one_or_none()
+    assert row is not None, "A transient Forbidden must not remove the tracking row"
+    assert row.joined_at == _JOINED_25H_AGO.replace(tzinfo=None)
+
+
+# ---------------------------------------------------------------------------
+# Test O — discord.NotFound from fetch_member remains terminal (contrast
+# with the transient Forbidden case above)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_fetch_member_not_found_removes_tracking() -> None:
+    """``fetch_member`` raising ``NotFound`` (member genuinely left) is terminal.
+
+    Contrast with ``test_fetch_member_forbidden_does_not_remove_tracking``:
+    only a confirmed-gone member (or an actual kick attempt) should remove
+    the tracking row (#300 fix 4).
+    """
+    engine = _make_engine()
+    _seed_member(engine, joined_at=_JOINED_25H_AGO)
+
+    guild = FakeGuild()  # member never registered; fetch_member -> NotFound
+    bot = FakeBot(ready=True)
+    scheduler = _make_scheduler(bot, guild, engine)
+
+    with time_machine.travel(_NOW, tick=False):
+        await _run_for(scheduler.run, 0.12)
+
+    with Session(engine) as session:
+        row = session.execute(
+            select(MemberActivity).where(
+                MemberActivity.guild_id == _GUILD_ID,
+                MemberActivity.member_id == _MEMBER_ID,
+            )
+        ).scalar_one_or_none()
+    assert row is None, "NotFound (member already left) must remove the tracking row"
