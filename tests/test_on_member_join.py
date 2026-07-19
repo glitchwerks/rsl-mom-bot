@@ -105,11 +105,12 @@ follow-up):
   assertion style of Test 2.
 - Test 8 covers a join in a guild other than the configured target
   (``member.guild.id != bot.guild.id``). Test 9 covers the
-  not-yet-configured case (``bot.guild is None``). Both are **red as
-  authored**: no guild-matching check exists yet in ``on_member_join``,
-  so today ``load_secret``/``get_channel`` are called (and, in Test 8,
-  ``fake_channel.send`` too) regardless of which guild the join came
-  from.
+  not-yet-configured case (``bot.guild is None``). Both were **red as
+  authored**: no guild-matching check existed yet in ``on_member_join``,
+  so at that time ``load_secret``/``get_channel`` were called (and, in
+  Test 8, ``fake_channel.send`` too) regardless of which guild the join
+  came from. This was resolved once the guild-scoping guard landed; both
+  tests now pass against the current implementation.
 """
 
 from __future__ import annotations
