@@ -18,6 +18,7 @@ from logging.config import fileConfig
 from alembic import context
 from sqlalchemy import engine_from_config, pool
 
+import mom_bot.new_member_alerts.models  # noqa: F401 — registers NewMemberAlertSubscription on Base.metadata
 import mom_bot.reminders.models  # noqa: F401 — registers Reminder + ReminderSent on Base.metadata
 import mom_bot.roles.models  # noqa: F401 — registers DayRoleMap on Base.metadata
 import mom_bot.sidecar.models  # noqa: F401 — registers MemberRoleSyncState on Base.metadata
@@ -31,7 +32,7 @@ config = context.config
 
 # Set up Python logging from the alembic.ini [loggers] section.
 if config.config_file_name is not None:
-    fileConfig(config.config_file_name)
+    fileConfig(config.config_file_name, disable_existing_loggers=False)
 
 # Wire the declarative base so autogenerate can diff against real models.
 target_metadata = Base.metadata

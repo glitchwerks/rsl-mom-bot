@@ -49,6 +49,8 @@ from mom_bot.db import build_session_factory as _build_session_factory
 from mom_bot.health import start_health_server
 from mom_bot.member_notifications.commands import register as _register_member_notifications
 from mom_bot.member_notifications.service import MemberNotificationService
+from mom_bot.new_member_alerts.commands import register as _register_new_member_alerts
+from mom_bot.new_member_alerts.service import NewMemberAlertService
 from mom_bot.post_conditions.client import SiegeWebClient
 from mom_bot.post_conditions.commands import register as _register_post_conditions
 from mom_bot.reminders.scheduler import ReminderScheduler
@@ -189,6 +191,12 @@ SiegeWebClient` instance registered via :func:`make_client`; stored so
         _mn_factory = _build_session_factory(_resolve_db_url())
         mn_service = MemberNotificationService(session_factory=_mn_factory)
         _register_member_notifications(tree=self.tree, service=mn_service)
+
+        new_member_alert_service = NewMemberAlertService(session_factory=_mn_factory)
+        _register_new_member_alerts(
+            tree=self.tree,
+            service=new_member_alert_service,
+        )
 
         self.tree.copy_global_to(guild=self.guild)
         await self.tree.sync(guild=self.guild)
@@ -425,6 +433,31 @@ SiegeWebClient` instance registered via :func:`make_client`; stored so
             member.id,
             channel_id,
         )
+
+        try:
+            factory = _build_session_factory(_resolve_db_url())
+            alert_service = NewMemberAlertService(session_factory=factory)
+            subscriber_ids = alert_service.list_subscriber_ids(str(self.guild.id))
+        except Exception:
+            _logger.exception(
+                "Failed to load new-member alert subscribers for guild %d",
+                self.guild.id,
+            )
+            return
+
+        for user_id in subscriber_ids:
+            officer = member.guild.get_member(int(user_id))
+            if officer is None:
+                continue
+            try:
+                await officer.send(f"New member joined the guild: {member.mention}")
+            except discord.Forbidden:
+                logging.getLogger("mom_bot.new_member_alerts.delivery").warning(
+                    "Failed to send new-member alert for member %d to officer %s",
+                    member.id,
+                    user_id,
+                    exc_info=True,
+                )
 
     def _start_sidecar(self) -> None:
         """Build the FastAPI sidecar and start it under uvicorn on port 8001.
