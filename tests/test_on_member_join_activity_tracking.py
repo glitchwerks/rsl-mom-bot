@@ -146,9 +146,8 @@ def _bind_session_factory(bot: Any, session_factory: Any) -> None:
 @pytest.mark.asyncio
 async def test_human_join_persists_member_activity_row() -> None:
     """A human join in the target guild inserts a member_activity row."""
-    from mom_bot.member_activity.models import MemberActivity
-
     from mom_bot.main import MomBot, build_intents
+    from mom_bot.member_activity.models import MemberActivity
 
     engine = _make_engine()
     session_factory = _make_session_factory(engine)
@@ -188,9 +187,8 @@ async def test_bot_account_join_is_not_tracked() -> None:
     Mirrors ``test_on_member_join_skips_bot_accounts`` — bot-account joins
     already short-circuit before any DB or channel call.
     """
-    from mom_bot.member_activity.models import MemberActivity
-
     from mom_bot.main import MomBot, build_intents
+    from mom_bot.member_activity.models import MemberActivity
 
     engine = _make_engine()
     session_factory = _make_session_factory(engine)
@@ -226,9 +224,8 @@ async def test_guild_mismatched_join_is_not_tracked() -> None:
 
     Mirrors ``test_on_member_join_returns_when_guild_mismatched``.
     """
-    from mom_bot.member_activity.models import MemberActivity
-
     from mom_bot.main import MomBot, build_intents
+    from mom_bot.member_activity.models import MemberActivity
 
     engine = _make_engine()
     session_factory = _make_session_factory(engine)
@@ -264,9 +261,8 @@ async def test_join_before_target_guild_configured_is_not_tracked() -> None:
 
     Mirrors ``test_on_member_join_returns_when_target_guild_not_configured``.
     """
-    from mom_bot.member_activity.models import MemberActivity
-
     from mom_bot.main import MomBot, build_intents
+    from mom_bot.member_activity.models import MemberActivity
 
     engine = _make_engine()
     session_factory = _make_session_factory(engine)

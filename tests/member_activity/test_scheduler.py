@@ -57,12 +57,12 @@ from unittest.mock import AsyncMock, MagicMock
 import discord
 import pytest
 import time_machine
-from mom_bot.member_activity.models import MemberActivity
-from mom_bot.member_activity.service import MemberActivityService
 from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session, sessionmaker
 
 from mom_bot.db import Base
+from mom_bot.member_activity.models import MemberActivity
+from mom_bot.member_activity.service import MemberActivityService
 
 _GUILD_ID = 300000000000000001
 _MEMBER_ID = 200000000000000042
