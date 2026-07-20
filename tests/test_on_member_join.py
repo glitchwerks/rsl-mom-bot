@@ -113,16 +113,17 @@ follow-up):
   tests now pass against the current implementation.
 
 Welcome-copy revision (issue #306):
-- The welcome message shipped under #299 tells new members to "check the
+- The welcome message shipped under #299 told new members to "check the
   pinned rules and pick your roles in #roles to get going." Issue #306
-  removes that line entirely (role self-assignment via #roles is being
-  dropped from the onboarding flow) and replaces it with a request for
+  removed that line entirely because role self-assignment via #roles was
+  dropped from the onboarding flow, and replaced it with a request for
   the new member to post a picture/screenshot of their in-game player
   profile.
-- Test 1b (below) is authored FIRST, before this copy change lands, and
-  is expected to be **red**: the current implementation still contains
-  the "#roles"/"pick your roles" phrasing and has no profile-screenshot
-  ask, so both halves of the assertion fail against it today.
+- Test 1b (below) was authored test-first. It was originally **red**,
+  pinning the requirement while the implementation still contained the
+  "#roles"/"pick your roles" phrasing and had no profile-screenshot ask.
+  The implementation then landed the copy change; Test 1b and the
+  implementation are now in their final, passing state.
 - Exact prose is left to the implementer. The test only pins the
   substrings needed to make "the #roles line is gone" and "a
   profile-screenshot ask exists" observable, without prescribing the
@@ -134,12 +135,11 @@ Welcome-copy revision (issue #306):
   roles..."); #306's spec has no requirement that the replacement line
   contain "next". Asserting it would have made an accidental word
   choice from the old copy an unintended, unspecified constraint on
-  #306's replacement text. Resolved by relaxing Test 1 to drop the
+  #306's replacement text. This was resolved by relaxing Test 1 to drop the
   "next" substring check while keeping its other assertions (single
   send, member mention, "welcome" line, "shortly" line) — see Test 1's
-  own docstring for the detail. Test 1 passes against current
-  (pre-#306) code; Test 1b is the red covering #306's actual
-  requirement.
+  own docstring for the detail. Both Test 1 and Test 1b now pass against
+  the final #306 implementation.
 """
 
 from __future__ import annotations
@@ -389,6 +389,12 @@ async def test_on_member_join_welcome_message_drops_roles_asks_for_profile_scree
         f"Expected the welcome message to reference the member's in-game "
         f"profile when asking for a screenshot/picture; got {message!r}"
     )
+    assert "pinned rules" not in lowered, (
+        f"Expected the pinned-rules instruction to be removed from "
+        f"the welcome message; got {message!r}"
+    )
+    assert "player" in lowered
+    assert "in-game" in lowered or "in game" in lowered
 
 
 # ---------------------------------------------------------------------------
