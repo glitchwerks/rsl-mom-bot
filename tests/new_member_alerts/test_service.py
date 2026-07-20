@@ -21,11 +21,11 @@ Spec reference: #301 officer join alerts.
 
 from __future__ import annotations
 
-from mom_bot.new_member_alerts.service import NewMemberAlertService
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 from mom_bot.db import Base
+from mom_bot.new_member_alerts.service import NewMemberAlertService
 
 # ---------------------------------------------------------------------------
 # Constants

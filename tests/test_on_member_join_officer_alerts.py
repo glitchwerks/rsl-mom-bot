@@ -99,11 +99,11 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import discord
 import pytest
-from mom_bot.new_member_alerts.service import NewMemberAlertService
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 from mom_bot.db import Base
+from mom_bot.new_member_alerts.service import NewMemberAlertService
 
 _NEW_MEMBERS_CHANNEL_ID = 555555555555555555
 _MEMBER_ID = 200000000000000042
