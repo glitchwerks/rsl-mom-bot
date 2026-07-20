@@ -155,7 +155,11 @@ def test_member_activity_downgrade_drops_table(tmp_path: Path) -> None:
         f"before downgrade is meaningful; found: {tables_after_upgrade}"
     )
 
-    command.downgrade(cfg, "-1")
+    # Target the specific ancestor revision rather than "-1": a later
+    # migration (b6_new_member_alert_subscription, #301) now chains on top
+    # of this one, so a relative one-step downgrade from head would only
+    # undo that later migration, not this one.
+    command.downgrade(cfg, "b4_idx_mn_sent_occ_date")
 
     engine = sa.create_engine(f"sqlite:///{db_file}")
     tables_after_downgrade = _get_table_names(engine)

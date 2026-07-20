@@ -1,7 +1,7 @@
 """Create new-member alert subscriptions (#301).
 
-Revision ID: b5_new_member_alert_subscription
-Revises: b4_idx_mn_sent_occ_date
+Revision ID: b6_new_member_alert_subscription
+Revises: b5_member_activity
 Create Date: 2026-07-19
 """
 
@@ -13,8 +13,8 @@ import sqlalchemy as sa
 from alembic import op
 
 # revision identifiers, used by Alembic.
-revision: str = "b5_new_member_alert_subscription"
-down_revision: str | Sequence[str] | None = "b4_idx_mn_sent_occ_date"
+revision: str = "b6_new_member_alert_subscription"
+down_revision: str | Sequence[str] | None = "b5_member_activity"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 

@@ -425,7 +425,10 @@ SiegeWebClient` instance registered via :func:`make_client`; stored so
         await self._send_welcome_message(member)
 
         try:
-            alert_service = NewMemberAlertService(session_factory=self._db_session_factory)
+            alert_factory = self._db_session_factory
+            if alert_factory is None:
+                raise RuntimeError("Database session factory is not initialized")
+            alert_service = NewMemberAlertService(session_factory=alert_factory)
             subscriber_ids = alert_service.list_subscriber_ids(str(self.guild.id))
         except Exception:
             _logger.exception(
