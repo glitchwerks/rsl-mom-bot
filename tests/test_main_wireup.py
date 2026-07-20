@@ -228,6 +228,84 @@ async def test_setup_hook_returns_promptly_without_gateway() -> None:
 
 
 # ---------------------------------------------------------------------------
+# Test 0b — setup_hook builds the shared session factory exactly once
+# (#301 fix 1: on_member_join's officer-DM fan-out must reuse it, not
+# rebuild per join event; mirrors the #300 branch's identical fix for
+# on_message/on_member_join — see
+# tests/test_on_member_join_officer_alerts.py for the consumer-side
+# contract)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_setup_hook_builds_session_factory_once_and_stores_it() -> None:
+    """setup_hook must build one session factory and store it on the bot.
+
+    Building a fresh SQLAlchemy engine/connection pool (and, for Postgres, a
+    fresh ``ManagedIdentityCredential``) per Discord event is a
+    resource-exhaustion risk under a burst of member joins (#301 fix 1).
+    setup_hook already builds a factory once for the member-notify/
+    new-member-alert command registration (``_mn_factory`` internally) —
+    this test locks in that it is stored on ``bot._db_session_factory`` so
+    ``on_member_join``'s officer-DM fan-out can reuse the same factory
+    instead of building its own per join event.
+
+    This test does not touch ``on_ready``'s or
+    ``_start_reminders_after_ready``'s own per-call factory builds — those
+    remain legitimately low-frequency/startup-time and are out of scope for
+    this fix.
+    """
+    from mom_bot.main import MomBot, build_intents
+
+    engine = _make_engine()
+    session_factory = _make_session_factory(engine)
+
+    load_secret_values = {
+        "guild-id": str(_GUILD_ID),
+        "reminder-channel-name": _CHANNEL_NAME,
+        "reminder-mention-role-name": _ROLE_NAME,
+    }
+
+    def fake_load_secret(name: str) -> str:
+        return load_secret_values[name]
+
+    bot = MomBot(intents=build_intents())
+
+    with (
+        patch("mom_bot.main.load_secret", side_effect=fake_load_secret),
+        patch("mom_bot.reminders.seed.load_secret", side_effect=fake_load_secret),
+        patch.object(bot.tree, "sync", new_callable=AsyncMock),
+        patch(
+            "mom_bot.main._build_session_factory",
+            return_value=session_factory,
+        ) as mock_build_factory,
+    ):
+        # Real wait_until_ready — not mocked; mirrors Test 0's pattern. The
+        # background task will block on it, which is fine — we only assert
+        # on setup_hook's own synchronous work below.
+        await asyncio.wait_for(bot.setup_hook(), timeout=2.0)
+
+    assert mock_build_factory.call_count == 1, (
+        "setup_hook must build the shared session factory exactly once; "
+        f"got {mock_build_factory.call_count} calls"
+    )
+    assert (
+        getattr(bot, "_db_session_factory", None) is session_factory
+    ), "setup_hook must store the built factory on bot._db_session_factory"
+
+    if bot._reminder_task is not None:
+        bot._reminder_task.cancel()
+        try:
+            await bot._reminder_task
+        except BaseException:
+            # Cleanup only — the reminder task inevitably fails on a real
+            # wait_until_ready() call here (this bot was never logged in);
+            # whether it lands as CancelledError or the underlying
+            # RuntimeError is a scheduling race irrelevant to this test.
+            pass
+
+
+# ---------------------------------------------------------------------------
 # Test 1 — setup_hook seeds two rows and starts the scheduler task
 # ---------------------------------------------------------------------------
 

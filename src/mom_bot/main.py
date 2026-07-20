@@ -42,6 +42,7 @@ import discord
 import uvicorn
 from aiohttp import web
 from discord import app_commands
+from sqlalchemy.orm import Session, sessionmaker
 
 from mom_bot import __version__
 from mom_bot.config import load_secret
@@ -49,6 +50,8 @@ from mom_bot.db import build_session_factory as _build_session_factory
 from mom_bot.health import start_health_server
 from mom_bot.member_notifications.commands import register as _register_member_notifications
 from mom_bot.member_notifications.service import MemberNotificationService
+from mom_bot.new_member_alerts.commands import register as _register_new_member_alerts
+from mom_bot.new_member_alerts.service import NewMemberAlertService
 from mom_bot.post_conditions.client import SiegeWebClient
 from mom_bot.post_conditions.commands import register as _register_post_conditions
 from mom_bot.reminders.scheduler import ReminderScheduler
@@ -116,6 +119,8 @@ class MomBot(discord.Client):
         tree: The slash-command tree bound to this client instance.
         guild: The target guild as a :class:`discord.Object`; populated by
             :meth:`setup_hook` after ``guild-id`` is resolved from Key Vault.
+        _db_session_factory: The shared SQLAlchemy session factory used by
+            command services and event handlers.
         _reminder_task: The asyncio task running the reminder scheduler;
             stored to prevent garbage collection.
         _health_runner: The aiohttp AppRunner for the /healthz server;
@@ -146,6 +151,7 @@ SiegeWebClient` instance registered via :func:`make_client`; stored so
         super().__init__(intents=intents)
         self.tree: app_commands.CommandTree = app_commands.CommandTree(self)
         self.guild: discord.Object | None = None
+        self._db_session_factory: sessionmaker[Session]
         self._reminder_task: asyncio.Task[None] | None = None
         self._health_runner: web.AppRunner | None = None
         self._siege_client: SiegeWebClient | None = None
@@ -186,9 +192,15 @@ SiegeWebClient` instance registered via :func:`make_client`; stored so
         # the full command set on every deploy (fix for PR #277 finding P1).
         # The session factory only needs the DB URL — no gateway connection
         # required — so it is safe to build here in setup_hook.
-        _mn_factory = _build_session_factory(_resolve_db_url())
-        mn_service = MemberNotificationService(session_factory=_mn_factory)
+        self._db_session_factory = _build_session_factory(_resolve_db_url())
+        mn_service = MemberNotificationService(session_factory=self._db_session_factory)
         _register_member_notifications(tree=self.tree, service=mn_service)
+
+        new_member_alert_service = NewMemberAlertService(session_factory=self._db_session_factory)
+        _register_new_member_alerts(
+            tree=self.tree,
+            service=new_member_alert_service,
+        )
 
         self.tree.copy_global_to(guild=self.guild)
         await self.tree.sync(guild=self.guild)
@@ -373,6 +385,40 @@ SiegeWebClient` instance registered via :func:`make_client`; stored so
         if self.guild is None or member.guild.id != self.guild.id:
             return
 
+        await self._send_welcome_message(member)
+
+        try:
+            alert_service = NewMemberAlertService(session_factory=self._db_session_factory)
+            subscriber_ids = alert_service.list_subscriber_ids(str(self.guild.id))
+        except Exception:
+            _logger.exception(
+                "Failed to load new-member alert subscribers for guild %d",
+                self.guild.id,
+            )
+            return
+
+        for user_id in subscriber_ids:
+            officer = member.guild.get_member(int(user_id))
+            if officer is None:
+                continue
+            if officer.guild_permissions.manage_guild is not True:
+                continue
+            try:
+                await officer.send(f"New member joined the guild: {member.mention}")
+            except (discord.Forbidden, discord.HTTPException):
+                logging.getLogger("mom_bot.new_member_alerts.delivery").warning(
+                    "Failed to send new-member alert for member %d to officer %s",
+                    member.id,
+                    user_id,
+                    exc_info=True,
+                )
+
+    async def _send_welcome_message(self, member: discord.Member) -> None:
+        """Send the configured welcome message to a newly joined member.
+
+        Args:
+            member: The guild member whose join event Discord dispatched.
+        """
         channel_secret = "new-members-channel-id"
         try:
             channel_id = int(load_secret(channel_secret))
