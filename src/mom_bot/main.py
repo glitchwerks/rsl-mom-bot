@@ -33,6 +33,7 @@ startup.
 from __future__ import annotations
 
 import asyncio
+import datetime
 import logging
 import os
 import time
@@ -48,6 +49,8 @@ from mom_bot import __version__
 from mom_bot.config import load_secret
 from mom_bot.db import build_session_factory as _build_session_factory
 from mom_bot.health import start_health_server
+from mom_bot.member_activity.scheduler import AutoKickScheduler
+from mom_bot.member_activity.service import MemberActivityService
 from mom_bot.member_notifications.commands import register as _register_member_notifications
 from mom_bot.member_notifications.service import MemberNotificationService
 from mom_bot.new_member_alerts.commands import register as _register_new_member_alerts
@@ -119,10 +122,14 @@ class MomBot(discord.Client):
         tree: The slash-command tree bound to this client instance.
         guild: The target guild as a :class:`discord.Object`; populated by
             :meth:`setup_hook` after ``guild-id`` is resolved from Key Vault.
-        _db_session_factory: The shared SQLAlchemy session factory used by
-            command services and event handlers.
+        _db_session_factory: Shared SQLAlchemy session factory built once
+            during :meth:`setup_hook` and reused by command services and
+            gateway event handlers.
         _reminder_task: The asyncio task running the reminder scheduler;
             stored to prevent garbage collection.
+        _auto_kick_task: The asyncio task running the inactive-member sweep;
+            created after gateway READY and stored to prevent garbage
+            collection.
         _health_runner: The aiohttp AppRunner for the /healthz server;
             stored so :meth:`close` can shut it down cleanly.
         _siege_client: The :class:`~mom_bot.post_conditions.client.\
@@ -151,8 +158,9 @@ SiegeWebClient` instance registered via :func:`make_client`; stored so
         super().__init__(intents=intents)
         self.tree: app_commands.CommandTree = app_commands.CommandTree(self)
         self.guild: discord.Object | None = None
-        self._db_session_factory: sessionmaker[Session]
+        self._db_session_factory: sessionmaker[Session] | None = None
         self._reminder_task: asyncio.Task[None] | None = None
+        self._auto_kick_task: asyncio.Task[None] | None = None
         self._health_runner: web.AppRunner | None = None
         self._siege_client: SiegeWebClient | None = None
         self._sidecar_task: asyncio.Task[None] | None = None
@@ -275,8 +283,23 @@ SiegeWebClient` instance registered via :func:`make_client`; stored so
                 )
                 raise RuntimeError(f"Guild {guild_id} not found after bot READY")
             scheduler = ReminderScheduler(self, factory, guild=live_guild)
+            auto_kick_scheduler = AutoKickScheduler(self, live_guild, factory)
+            self._auto_kick_task = asyncio.create_task(
+                auto_kick_scheduler.run(),
+                name="auto-kick-scheduler",
+            )
+            self._auto_kick_task.add_done_callback(_log_task_exception)
             _logger.info("Reminder scheduler started")
-            await scheduler.run()
+            _logger.info("Auto-kick scheduler started")
+            try:
+                await scheduler.run()
+            finally:
+                if self._auto_kick_task is not None and not self._auto_kick_task.done():
+                    self._auto_kick_task.cancel()
+                    try:
+                        await self._auto_kick_task
+                    except asyncio.CancelledError:
+                        pass
         except asyncio.CancelledError:
             raise  # shutdown signal — not an error, do not log
         except Exception:
@@ -385,10 +408,27 @@ SiegeWebClient` instance registered via :func:`make_client`; stored so
         if self.guild is None or member.guild.id != self.guild.id:
             return
 
+        try:
+            factory = self._db_session_factory
+            if factory is None:
+                raise RuntimeError("Database session factory is not initialized")
+            activity_service = MemberActivityService(factory)
+            joined_at = datetime.datetime.now(datetime.UTC).replace(tzinfo=None)
+            activity_service.record_join(member.guild.id, member.id, joined_at)
+        except Exception:
+            _logger.exception(
+                "Failed to record join activity for member %d in guild %d",
+                member.id,
+                member.guild.id,
+            )
+
         await self._send_welcome_message(member)
 
         try:
-            alert_service = NewMemberAlertService(session_factory=self._db_session_factory)
+            alert_factory = self._db_session_factory
+            if alert_factory is None:
+                raise RuntimeError("Database session factory is not initialized")
+            alert_service = NewMemberAlertService(session_factory=alert_factory)
             subscriber_ids = alert_service.list_subscriber_ids(str(self.guild.id))
         except Exception:
             _logger.exception(
@@ -470,6 +510,32 @@ SiegeWebClient` instance registered via :func:`make_client`; stored so
             "Sent welcome message for member %d to channel %d",
             member.id,
             channel_id,
+        )
+
+    async def on_message(self, message: discord.Message) -> None:
+        """Record the first guild message from a tracked human member.
+
+        Args:
+            message: Discord message dispatched by the gateway.
+        """
+        if message.author.bot:
+            return
+
+        if message.guild is None:
+            return
+
+        if self.guild is None or message.guild.id != self.guild.id:
+            return
+
+        factory = self._db_session_factory
+        if factory is None:
+            raise RuntimeError("Database session factory is not initialized")
+        activity_service = MemberActivityService(factory)
+        message_at = message.created_at.astimezone(datetime.UTC).replace(tzinfo=None)
+        activity_service.record_first_message(
+            message.guild.id,
+            message.author.id,
+            message_at,
         )
 
     def _start_sidecar(self) -> None:
@@ -587,8 +653,9 @@ SiegeWebClient` instance registered via :func:`make_client`; stored so
 def build_intents() -> discord.Intents:
     """Build the locked-spec intents flag set.
 
-    Enables exactly the three intents agreed in Epic 0 session decisions:
-    ``GUILDS``, ``GUILD_MEMBERS``, and ``GUILD_SCHEDULED_EVENTS``.  All
+    Enables exactly the four intents required by the bot:
+    ``GUILDS``, ``GUILD_MEMBERS``, ``GUILD_SCHEDULED_EVENTS``, and
+    ``GUILD_MESSAGES``. All
     other privileged intents (``MESSAGE_CONTENT``, ``GUILD_PRESENCES``)
     are intentionally left off.
 
@@ -599,6 +666,7 @@ def build_intents() -> discord.Intents:
     intents.guilds = True
     intents.members = True
     intents.guild_scheduled_events = True
+    intents.guild_messages = True
     return intents
 
 
