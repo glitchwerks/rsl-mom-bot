@@ -32,4 +32,6 @@ param reminderMentionRoleName = 'Member'
 // Operator-confirmed prod Discord guild snowflake (2026-05-27).
 // Passes @minLength(17)/@maxLength(20) decorators added in 40355b7.
 param guildId = '1112031869337346184'
+// Operator-confirmed prod new-members channel snowflake (2026-07-19).
+param newMembersChannelId = '1414287183698854018'
 

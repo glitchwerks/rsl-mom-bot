@@ -700,6 +700,25 @@ $devGuildId  = Read-Host "Paste your DEV guild ID (test server)"
 az keyvault secret set --vault-name kv-mombot-eastus2 --name dev-guild-id  --value $devGuildId  | Out-Null
 ```
 
+### New-members channel IDs — different per environment
+
+> **`prod-new-members-channel-id` is Bicep-managed via
+> `infra/main.bicepparam` (`param newMembersChannelId`). Replace the fake
+> placeholder there with the real production channel ID before deploying.
+> The `dev-new-members-channel-id` secret remains manual because the dev
+> environment is not provisioned by this Bicep template.**
+
+Each Discord server has its own new-members channel. With Developer Mode on,
+right-click the channel that should receive welcome messages and select
+"Copy Channel ID". Channel IDs are public identifiers and are safe to echo.
+
+```powershell
+# DEV only — prod-new-members-channel-id is Bicep-managed (see note above).
+$devNewMembersChannelId = Read-Host "Paste your DEV new-members channel ID"
+
+az keyvault secret set --vault-name kv-mombot-eastus2 --name dev-new-members-channel-id --value $devNewMembersChannelId | Out-Null
+```
+
 ### Database URL — different per environment
 
 ```powershell
@@ -770,6 +789,7 @@ You should see, at minimum:
 
 - `dev-discord-token`, `prod-discord-token`
 - `dev-guild-id`, `prod-guild-id` ← `prod-guild-id` provisioned by Bicep (#121, #236)
+- `dev-new-members-channel-id`, `prod-new-members-channel-id` ← `prod-*` provisioned by Bicep (#299)
 - `dev-database-url`, `prod-database-url`
 - `dev-app-insights-conn-string`, `prod-app-insights-conn-string`
 - `dev-reminder-channel-name`, `prod-reminder-channel-name` ← `prod-*` provisioned by Bicep (#121)

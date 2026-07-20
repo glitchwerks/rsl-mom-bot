@@ -36,6 +36,7 @@ import asyncio
 import logging
 import os
 import time
+from typing import cast
 
 import discord
 import uvicorn
@@ -359,6 +360,71 @@ SiegeWebClient` instance registered via :func:`make_client`; stored so
         # is already running (reconnect scenario), leave it untouched.
         if self._sidecar_task is None or self._sidecar_task.done():
             self._start_sidecar()
+
+    async def on_member_join(self, member: discord.Member) -> None:
+        """Welcome a newly joined human member in the configured channel.
+
+        Args:
+            member: The guild member whose join event Discord dispatched.
+        """
+        if member.bot:
+            return
+
+        if self.guild is None or member.guild.id != self.guild.id:
+            return
+
+        channel_secret = "new-members-channel-id"
+        try:
+            channel_id = int(load_secret(channel_secret))
+        except Exception:
+            _logger.exception(
+                "Failed to resolve channel ID from secret %r for member %d; "
+                "welcome message not sent",
+                channel_secret,
+                member.id,
+            )
+            return
+
+        raw_channel = self.get_channel(channel_id)
+        if raw_channel is None:
+            _logger.error(
+                "New-members channel %d not found; welcome message not sent",
+                channel_id,
+            )
+            return
+
+        if not isinstance(raw_channel, discord.abc.Messageable) and not callable(
+            getattr(raw_channel, "send", None)
+        ):
+            _logger.warning(
+                "New-members channel %d is not messageable for member %d; "
+                "welcome message not sent",
+                channel_id,
+                member.id,
+            )
+            return
+
+        channel = cast(discord.abc.Messageable, raw_channel)
+        try:
+            await channel.send(
+                f"👋 Welcome, {member.mention}! Glad to have you here.\n"
+                "Next, check the pinned rules and pick your roles in #roles to get going.\n"
+                "Someone from the team will swing by shortly to help you settle in — hang tight!"
+            )
+        except (discord.Forbidden, discord.HTTPException):
+            _logger.warning(
+                "Failed to send welcome message for member %d to channel %d",
+                member.id,
+                channel_id,
+                exc_info=True,
+            )
+            return
+
+        _logger.info(
+            "Sent welcome message for member %d to channel %d",
+            member.id,
+            channel_id,
+        )
 
     def _start_sidecar(self) -> None:
         """Build the FastAPI sidecar and start it under uvicorn on port 8001.

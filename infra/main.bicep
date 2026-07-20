@@ -59,6 +59,11 @@ param reminderMentionRoleName string
 @maxLength(20)
 param guildId string
 
+@description('Discord new-members channel snowflake ID for this environment. Must be a 17–20 digit numeric string.')
+@minLength(17)
+@maxLength(20)
+param newMembersChannelId string
+
 // ---------------------------------------------------------------------------
 // Resource group
 // ---------------------------------------------------------------------------
@@ -96,6 +101,7 @@ module kv 'modules/keyvault.bicep' = {
     reminderChannelName: reminderChannelName
     reminderMentionRoleName: reminderMentionRoleName
     guildId: guildId
+    newMembersChannelId: newMembersChannelId
   }
 }
 

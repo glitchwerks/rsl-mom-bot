@@ -37,6 +37,11 @@ param reminderMentionRoleName string
 @description('Discord guild (server) snowflake ID for this environment.')
 param guildId string
 
+@description('Discord new-members channel snowflake ID for this environment.')
+@minLength(17)
+@maxLength(20)
+param newMembersChannelId string
+
 // ---------------------------------------------------------------------------
 // Built-in RBAC role definition IDs (stable; do not parameterize)
 // ---------------------------------------------------------------------------
@@ -115,6 +120,15 @@ resource guildIdSecret 'Microsoft.KeyVault/vaults/secrets@2023-07-01' = {
   name: '${momBotEnv}-guild-id'
   properties: {
     value: guildId
+    contentType: 'text/plain'
+  }
+}
+
+resource newMembersChannelIdSecret 'Microsoft.KeyVault/vaults/secrets@2023-07-01' = {
+  parent: kv
+  name: '${momBotEnv}-new-members-channel-id'
+  properties: {
+    value: newMembersChannelId
     contentType: 'text/plain'
   }
 }
