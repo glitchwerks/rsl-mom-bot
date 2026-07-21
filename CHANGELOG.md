@@ -10,6 +10,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 <!-- Add a "### 📣 Highlights" sub-section here before cutting the next release.
      See RELEASING.md § "Discord Highlights convention" for what to write there. -->
 
+## [1.4.0] - 2026-07-20
+
+### 📣 Highlights
+
+v1.4.0 is all about making new members feel welcome and making sure nobody falls through the cracks:
+
+- **A proper welcome** — new members joining the server now get an automatic welcome message in `#new-members`, asking for a screenshot of their in-game player profile so officers can get them set up faster.
+- **Officer join alerts** — officers can now opt in to a DM ping whenever a new member joins, via `/notify-new-members`, instead of relying on catching it in chat.
+- **A safety net for silent joiners** — if a new member doesn't post anything within 24 hours of joining, the bot now sends them a friendly heads-up DM and removes them from the server, keeping the member list accurate without requiring manual officer cleanup.
+
+### Added
+
+- **Welcome message for new members** — new joiners now get an automatic welcome post in `#new-members`; a follow-up pass replaced the earlier `#roles` self-assignment line with an ask for a screenshot of the member's in-game player profile (#303, #307).
+- **`/notify-new-members` officer alert command** — officers can subscribe to a DM ping whenever a new member joins, instead of relying on catching it live in chat (#305).
+- **Auto-kick for silent new members** — members who post nothing within 24h of joining now receive a best-effort DM heads-up before being removed from the server, keeping membership accurate without manual officer follow-up (#304).
+
+### Infrastructure
+
+- **`claude-pr-review` GitHub Actions workflow removed** — PR review is now handled by CodeRabbit, making the Claude-powered review workflow redundant (#298).
+
 ## [1.3.0] - 2026-06-29
 
 ### 📣 Highlights
@@ -165,5 +185,9 @@ v1.1.0 makes mom-bot observable and hardens its infrastructure for the long run:
 
 **Pre-1.0 history**: Initial pre-1.0 development — see `git log` and the merged PR history for full provenance.
 
-[Unreleased]: https://github.com/glitchwerks/rsl-mom-bot/compare/v1.0.0...HEAD
+[Unreleased]: https://github.com/glitchwerks/rsl-mom-bot/compare/v1.4.0...HEAD
+[1.4.0]: https://github.com/glitchwerks/rsl-mom-bot/compare/v1.3.0...v1.4.0
+[1.3.0]: https://github.com/glitchwerks/rsl-mom-bot/compare/v1.2.0...v1.3.0
+[1.2.0]: https://github.com/glitchwerks/rsl-mom-bot/compare/v1.1.0...v1.2.0
+[1.1.0]: https://github.com/glitchwerks/rsl-mom-bot/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/glitchwerks/rsl-mom-bot/releases/tag/v1.0.0
