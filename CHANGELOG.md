@@ -185,5 +185,9 @@ v1.1.0 makes mom-bot observable and hardens its infrastructure for the long run:
 
 **Pre-1.0 history**: Initial pre-1.0 development — see `git log` and the merged PR history for full provenance.
 
-[Unreleased]: https://github.com/glitchwerks/rsl-mom-bot/compare/v1.0.0...HEAD
+[Unreleased]: https://github.com/glitchwerks/rsl-mom-bot/compare/v1.4.0...HEAD
+[1.4.0]: https://github.com/glitchwerks/rsl-mom-bot/compare/v1.3.0...v1.4.0
+[1.3.0]: https://github.com/glitchwerks/rsl-mom-bot/compare/v1.2.0...v1.3.0
+[1.2.0]: https://github.com/glitchwerks/rsl-mom-bot/compare/v1.1.0...v1.2.0
+[1.1.0]: https://github.com/glitchwerks/rsl-mom-bot/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/glitchwerks/rsl-mom-bot/releases/tag/v1.0.0
