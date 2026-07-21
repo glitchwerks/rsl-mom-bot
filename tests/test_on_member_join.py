@@ -111,6 +111,35 @@ follow-up):
   Test 8, ``fake_channel.send`` too) regardless of which guild the join
   came from. This was resolved once the guild-scoping guard landed; both
   tests now pass against the current implementation.
+
+Welcome-copy revision (issue #306):
+- The welcome message shipped under #299 told new members to "check the
+  pinned rules and pick your roles in #roles to get going." Issue #306
+  removed that line entirely because role self-assignment via #roles was
+  dropped from the onboarding flow, and replaced it with a request for
+  the new member to post a picture/screenshot of their in-game player
+  profile.
+- Test 1b (below) was authored test-first. It was originally **red**,
+  pinning the requirement while the implementation still contained the
+  "#roles"/"pick your roles" phrasing and had no profile-screenshot ask.
+  The implementation then landed the copy change; Test 1b and the
+  implementation are now in their final, passing state.
+- Exact prose is left to the implementer. The test only pins the
+  substrings needed to make "the #roles line is gone" and "a
+  profile-screenshot ask exists" observable, without prescribing the
+  full sentence.
+- Conflict resolution with Test 1: Test 1 (pre-existing, from #299)
+  originally asserted ``"next" in lowered`` as part of its "what to do
+  next placeholder instruction" check. That word came only from the
+  #299 line #306 deletes ("Next, check the pinned rules and pick your
+  roles..."); #306's spec has no requirement that the replacement line
+  contain "next". Asserting it would have made an accidental word
+  choice from the old copy an unintended, unspecified constraint on
+  #306's replacement text. This was resolved by relaxing Test 1 to drop the
+  "next" substring check while keeping its other assertions (single
+  send, member mention, "welcome" line, "shortly" line) — see Test 1's
+  own docstring for the detail. Both Test 1 and Test 1b now pass against
+  the final #306 implementation.
 """
 
 from __future__ import annotations
@@ -253,9 +282,18 @@ async def test_on_member_join_posts_welcome_message_with_mention() -> None:
        configured integer snowflake (not a name-based lookup).
     2. Exactly one message is sent to that channel.
     3. The message mentions the joining member.
-    4. The message contains, in the same post, a welcome line, a "what to
-       do next" placeholder instruction, and a "someone will help you
-       shortly" line.
+    4. The message contains, in the same post, a welcome line and a
+       "someone will help you shortly" line.
+
+    Deliberately NOT asserted here: the content of the "what to do next"
+    instruction. Issue #299's original copy satisfied that clause with a
+    line containing the literal word "next" (pointing at #roles); issue
+    #306 replaces that line with a profile-screenshot ask that has no
+    reason to contain "next". Pinning to that word would make this test
+    an accidental, unintended constraint on #306's copy change. The "what
+    to do next" instruction itself is still covered — by Test 1b below,
+    which pins the #306-specific substrings without reintroducing a
+    dependency on the deleted line's wording.
     """
     from mom_bot.main import MomBot, build_intents
 
@@ -287,12 +325,76 @@ async def test_on_member_join_posts_welcome_message_with_mention() -> None:
 
     lowered = message.lower()
     assert "welcome" in lowered, f"Expected a welcome line in message; got {message!r}"
-    assert "next" in lowered, (
-        f"Expected a 'what to do next' placeholder instruction in message; " f"got {message!r}"
-    )
     assert "shortly" in lowered, (
         f"Expected a 'someone will help you shortly' line in message; " f"got {message!r}"
     )
+
+
+# ---------------------------------------------------------------------------
+# Test 1b — welcome message drops the #roles line, adds a profile-screenshot ask
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_on_member_join_welcome_message_drops_roles_asks_for_profile_screenshot() -> None:
+    """The welcome message must drop the #roles instruction and ask for a profile screenshot.
+
+    Issue #306 revises the welcome copy shipped under #299:
+
+    1. The line pointing new members at "#roles" to self-assign roles is
+       removed entirely — neither the channel reference ("#roles") nor
+       the "pick your roles" phrasing may appear anywhere in the posted
+       message.
+    2. A new line asks the member to post a picture or screenshot of
+       their in-game player profile.
+
+    Exact prose is left to the implementer; this test pins only the
+    substrings needed to make both halves of the change observable, so
+    an implementation can't satisfy it by e.g. merely renaming the
+    channel reference while keeping the roles instruction, or by adding
+    an unrelated "next steps" line that never mentions a profile
+    screenshot.
+    """
+    from mom_bot.main import MomBot, build_intents
+
+    fake_channel = FakeChannel(_NEW_MEMBERS_CHANNEL_ID)
+    bot = MomBot(intents=build_intents())
+    bot.guild = discord.Object(id=_TARGET_GUILD_ID)
+    member = _make_member(is_bot=False, guild_id=_TARGET_GUILD_ID)
+
+    with (
+        patch("mom_bot.main.load_secret", side_effect=_fake_load_secret),
+        patch.object(bot, "get_channel", return_value=fake_channel),
+    ):
+        await bot.on_member_join(member)
+
+    fake_channel.send.assert_awaited_once()
+    call_args = fake_channel.send.call_args
+    message: str = call_args.args[0] if call_args.args else call_args.kwargs.get("content", "")
+    lowered = message.lower()
+
+    assert "#roles" not in lowered, (
+        f"Expected the '#roles' channel reference to be removed from the "
+        f"welcome message; got {message!r}"
+    )
+    assert "pick your roles" not in lowered, (
+        f"Expected the 'pick your roles' instruction to be removed from "
+        f"the welcome message; got {message!r}"
+    )
+    assert "screenshot" in lowered or "picture" in lowered, (
+        f"Expected the welcome message to ask for a picture/screenshot of "
+        f"the member's in-game profile; got {message!r}"
+    )
+    assert "profile" in lowered, (
+        f"Expected the welcome message to reference the member's in-game "
+        f"profile when asking for a screenshot/picture; got {message!r}"
+    )
+    assert "pinned rules" not in lowered, (
+        f"Expected the pinned-rules instruction to be removed from "
+        f"the welcome message; got {message!r}"
+    )
+    assert "player" in lowered
+    assert "in-game" in lowered or "in game" in lowered
 
 
 # ---------------------------------------------------------------------------

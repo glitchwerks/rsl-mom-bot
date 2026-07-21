@@ -494,7 +494,7 @@ SiegeWebClient` instance registered via :func:`make_client`; stored so
         try:
             await channel.send(
                 f"👋 Welcome, {member.mention}! Glad to have you here.\n"
-                "Next, check the pinned rules and pick your roles in #roles to get going.\n"
+                "Please post a screenshot of your in-game player profile.\n"
                 "Someone from the team will swing by shortly to help you settle in — hang tight!"
             )
         except (discord.Forbidden, discord.HTTPException):
