@@ -516,11 +516,12 @@ async def test_on_member_join_welcome_channel_not_found_still_dms_officers() -> 
                 MagicMock(status=404, reason="Unknown Channel"),
                 "Unknown Channel",
             ),
-        ),
+        ) as fetch_channel_mock,
         patch("mom_bot.main._build_session_factory", return_value=factory),
     ):
         await bot.on_member_join(member)  # must not raise
 
+    fetch_channel_mock.assert_awaited_once_with(_NEW_MEMBERS_CHANNEL_ID)
     officer_a.send.assert_awaited_once()
     officer_b.send.assert_awaited_once()
 

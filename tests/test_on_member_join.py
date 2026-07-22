@@ -469,12 +469,13 @@ async def test_on_member_join_returns_when_channel_not_found(
                     MagicMock(status=404, reason="Unknown Channel"),
                     "Unknown Channel",
                 ),
-            ),
+            ) as fetch_channel_mock,
         ):
             await bot.on_member_join(member)
 
     # Reaching this point already proves no exception propagated.
     _assert_warning_logged_by_main(caplog)
+    fetch_channel_mock.assert_awaited_once_with(_NEW_MEMBERS_CHANNEL_ID)
 
 
 # ---------------------------------------------------------------------------
