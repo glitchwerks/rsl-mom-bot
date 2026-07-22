@@ -10,6 +10,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 <!-- Add a "### 📣 Highlights" sub-section here before cutting the next release.
      See RELEASING.md § "Discord Highlights convention" for what to write there. -->
 
+## [1.4.1] - 2026-07-21
+
+### 📣 Highlights
+
+New members joining right after a bot restart now reliably get their welcome message — a caching edge case could previously cause it to be silently skipped.
+
+### Fixed
+
+- **Welcome message no longer silently dropped on a channel cache miss** — `_send_welcome_message` now falls back to `fetch_channel` when the configured new-members channel isn't yet in the gateway's local cache (e.g. shortly after a bot reconnect/resume), instead of failing silently (#310, #311).
+
 ## [1.4.0] - 2026-07-20
 
 ### 📣 Highlights
@@ -185,7 +195,8 @@ v1.1.0 makes mom-bot observable and hardens its infrastructure for the long run:
 
 **Pre-1.0 history**: Initial pre-1.0 development — see `git log` and the merged PR history for full provenance.
 
-[Unreleased]: https://github.com/glitchwerks/rsl-mom-bot/compare/v1.4.0...HEAD
+[Unreleased]: https://github.com/glitchwerks/rsl-mom-bot/compare/v1.4.1...HEAD
+[1.4.1]: https://github.com/glitchwerks/rsl-mom-bot/compare/v1.4.0...v1.4.1
 [1.4.0]: https://github.com/glitchwerks/rsl-mom-bot/compare/v1.3.0...v1.4.0
 [1.3.0]: https://github.com/glitchwerks/rsl-mom-bot/compare/v1.2.0...v1.3.0
 [1.2.0]: https://github.com/glitchwerks/rsl-mom-bot/compare/v1.1.0...v1.2.0
