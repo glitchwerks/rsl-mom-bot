@@ -473,11 +473,15 @@ SiegeWebClient` instance registered via :func:`make_client`; stored so
 
         raw_channel = self.get_channel(channel_id)
         if raw_channel is None:
-            _logger.error(
-                "New-members channel %d not found; welcome message not sent",
-                channel_id,
-            )
-            return
+            try:
+                raw_channel = await self.fetch_channel(channel_id)
+            except (discord.Forbidden, discord.HTTPException):
+                _logger.error(
+                    "New-members channel %d not found; welcome message not sent",
+                    channel_id,
+                    exc_info=True,
+                )
+                return
 
         if not isinstance(raw_channel, discord.abc.Messageable) and not callable(
             getattr(raw_channel, "send", None)

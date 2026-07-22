@@ -461,6 +461,15 @@ async def test_on_member_join_returns_when_channel_not_found(
         with (
             patch("mom_bot.main.load_secret", side_effect=_fake_load_secret),
             patch.object(bot, "get_channel", return_value=None),
+            patch.object(
+                bot,
+                "fetch_channel",
+                new_callable=AsyncMock,
+                side_effect=discord.NotFound(
+                    MagicMock(status=404, reason="Unknown Channel"),
+                    "Unknown Channel",
+                ),
+            ),
         ):
             await bot.on_member_join(member)
 
