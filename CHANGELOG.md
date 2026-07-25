@@ -10,6 +10,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 <!-- Add a "### 📣 Highlights" sub-section here before cutting the next release.
      See RELEASING.md § "Discord Highlights convention" for what to write there. -->
 
+### Added
+
+- **Siege reminders** — the bot now posts reminders 48 hours and 24 hours before each Siege in the same channel used for Hydra and Chimera reminders (#325).
+
 ## [1.4.1] - 2026-07-21
 
 ### 📣 Highlights

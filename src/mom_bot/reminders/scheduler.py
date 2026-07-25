@@ -70,6 +70,8 @@ import mom_bot.health as health
 from mom_bot.member_notifications.service import MemberNotificationService
 from mom_bot.reminders.calendar import (
     is_end_of_tank_date,
+    is_siege_24h_headsup_date,
+    is_siege_48h_headsup_date,
     is_tank_week_headsup_date,
 )
 from mom_bot.reminders.models import Reminder, ReminderSent  # noqa: F401
@@ -235,6 +237,12 @@ class ReminderScheduler:
                         kept.append(reminder)
                 elif cond == "tank_week_end":
                     if is_end_of_tank_date(today_date):
+                        kept.append(reminder)
+                elif cond == "siege_48h_headsup":
+                    if is_siege_48h_headsup_date(today_date):
+                        kept.append(reminder)
+                elif cond == "siege_24h_headsup":
+                    if is_siege_24h_headsup_date(today_date):
                         kept.append(reminder)
                 # Unknown values are silently dropped (defensive).
 

@@ -312,10 +312,10 @@ async def test_setup_hook_builds_session_factory_once_and_stores_it() -> None:
 
 @pytest.mark.asyncio
 async def test_setup_hook_seeds_and_starts_scheduler() -> None:
-    """setup_hook() must seed two reminder rows and start the scheduler task.
+    """setup_hook() must seed six reminder rows and start the scheduler task.
 
     Verifies:
-    1. ``_maybe_seed_reminders`` is called (two rows in reminders table).
+    1. ``_maybe_seed_reminders`` is called (six rows in reminders table).
     2. The scheduler task is stored on ``bot._reminder_task``.
     3. The task is not done immediately (it is running, not finished).
 
@@ -377,7 +377,7 @@ async def test_setup_hook_seeds_and_starts_scheduler() -> None:
         from sqlalchemy import func
 
         count = session.scalar(select(func.count()).select_from(Reminder))
-    assert count == 4, f"Expected 4 seeded rows, got {count}"
+    assert count == 6, f"Expected 6 seeded rows, got {count}"
 
     # Assert scheduler task was stored.
     assert hasattr(bot, "_reminder_task"), "bot._reminder_task not set by setup_hook"
