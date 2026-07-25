@@ -10,9 +10,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 <!-- Add a "### 📣 Highlights" sub-section here before cutting the next release.
      See RELEASING.md § "Discord Highlights convention" for what to write there. -->
 
+## [1.5.0] - 2026-07-25
+
+### 📣 Highlights
+
+v1.5.0 adds a new recurring reminder for Siege: the bot now posts a heads-up 48 hours before Siege starts, and another 24 hours before, in the same channel and with the same role ping already used for Hydra and Chimera reminders — no more relying on someone remembering to post it manually.
+
 ### Added
 
-- **Siege reminders** — the bot now posts reminders 48 hours and 24 hours before each Siege in the same channel used for Hydra and Chimera reminders (#325).
+- **Bi-weekly Siege reminders** — the bot now posts reminders 48 hours and 24 hours before each Siege (14-day cadence), reusing the existing Hydra/Chimera reminder channel and role. Calendar predicates and a `month_condition` CHECK widen landed first (#325, #326, #328), followed by the message templates, scheduler wiring, and seed migration (#327, #329).
+
+### Infrastructure
+
+- **Deployed SHA recorded as a GitHub Deployment on `prod-infra`** — `infra-deploy.yml` now captures the actually-checked-out commit SHA and records it as a GitHub Deployment on the `prod-infra` environment after a successful Bicep apply, followed by a Deployment Status post so the environment doesn't show pending indefinitely. Slice 1 of the deploy-recency guardrail (#316, #321).
+
+### Documentation
+
+- **README refreshed for current v1.4.1 state** — Status/Roadmap brought current, a "What it does" feature summary added, the hand-maintained epic table replaced with pointers to CHANGELOG.md and GitHub Releases, a CI Workflows section added, and Project Structure pruned to the actual package layout (#322, #324).
 
 ## [1.4.1] - 2026-07-21
 
@@ -199,7 +213,8 @@ v1.1.0 makes mom-bot observable and hardens its infrastructure for the long run:
 
 **Pre-1.0 history**: Initial pre-1.0 development — see `git log` and the merged PR history for full provenance.
 
-[Unreleased]: https://github.com/glitchwerks/rsl-mom-bot/compare/v1.4.1...HEAD
+[Unreleased]: https://github.com/glitchwerks/rsl-mom-bot/compare/v1.5.0...HEAD
+[1.5.0]: https://github.com/glitchwerks/rsl-mom-bot/compare/v1.4.1...v1.5.0
 [1.4.1]: https://github.com/glitchwerks/rsl-mom-bot/compare/v1.4.0...v1.4.1
 [1.4.0]: https://github.com/glitchwerks/rsl-mom-bot/compare/v1.3.0...v1.4.0
 [1.3.0]: https://github.com/glitchwerks/rsl-mom-bot/compare/v1.2.0...v1.3.0
