@@ -453,7 +453,7 @@ class TestSiegeMonthConditionsMigration:
         cfg = Config(_ALEMBIC_INI)
         script = ScriptDirectory.from_config(cfg)
         heads = script.get_heads()
-        assert heads == (self._EXPECTED_HEAD,), (
+        assert heads == [self._EXPECTED_HEAD], (
             f"Expected exactly one alembic head, {self._EXPECTED_HEAD!r}, " f"got: {heads}"
         )
 
