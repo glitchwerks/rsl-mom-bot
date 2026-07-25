@@ -87,7 +87,8 @@ class Reminder(Base):
         CheckConstraint("weekday >= 0 AND weekday <= 6", name="ck_weekday"),
         CheckConstraint(
             "month_condition IS NULL OR month_condition IN "
-            "('tank_week_headsup', 'tank_week_end')",
+            "('tank_week_headsup', 'tank_week_end', 'siege_48h_headsup', "
+            "'siege_24h_headsup')",
             name="ck_month_condition",
         ),
         CheckConstraint(
