@@ -2,8 +2,6 @@
 
 Discord bot consolidating two existing bots — `siege-web`'s notifications sidecar and the reminder system from `I:\games\raid\siege\clan\` — into a single bot with interactive slash commands.
 
-**Status:** v1.4.1 shipped (2026-07-21) — full sidecar + reminder bot consolidation, interactive slash commands, PostgreSQL on Azure, new-member onboarding automation, and production observability. Active work: [Milestone #7 — Infra deploy-recency guardrail](https://github.com/glitchwerks/rsl-mom-bot/milestone/7) (issue #315). Recording the deployed commit as a GitHub Deployment landed in #321; the recency-check workflow (#318) and its runbook documentation (#319) are not yet implemented. Manual Azure provisioning for new environments requires the AAD preflight steps in `infra/aad-runbook.md`.
-
 ## What it does
 
 - **Reminders** — scheduled channel posts for Hydra and Chimera clashes, with a Hydra Tank Week variant that swaps in a heads-up and an end-of-clash message.
