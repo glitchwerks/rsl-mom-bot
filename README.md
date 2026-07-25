@@ -87,8 +87,13 @@ az role assignment create \
 
 ```bash
 # MOM_BOT_ENV=dev causes config.load_secret() to read dev-* secrets from KV.
-MOM_BOT_ENV=dev .venv/Scripts/python.exe -m mom_bot          # Windows
+MOM_BOT_ENV=dev .venv/Scripts/python.exe -m mom_bot          # Windows (Git Bash)
 # MOM_BOT_ENV=dev .venv/bin/python -m mom_bot                # Linux / macOS
+```
+
+```powershell
+# PowerShell equivalent:
+$env:MOM_BOT_ENV = "dev"; .\.venv\Scripts\python.exe -m mom_bot
 ```
 
 `DefaultAzureCredential` picks up your `az login` session automatically — no
