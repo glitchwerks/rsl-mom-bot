@@ -435,3 +435,71 @@ def test_delivery_target_check_accepts_dm(session: Session) -> None:
     session.commit()
     session.refresh(reminder)
     assert reminder.delivery_target == "dm"
+
+
+# ---------------------------------------------------------------------------
+# Schema: month_condition CHECK constraint widened for Siege values (#326)
+#
+# This is the ORM/SQLite-side companion to the Postgres-side migration
+# CHECK test in tests/test_alembic_postgres.py. The constraint has two
+# independent sources — the ``CheckConstraint`` declared in
+# ``__table_args__`` (enforced by SQLite via Base.metadata.create_all())
+# and the Postgres-only migration constraint — and both must be widened
+# together, so both need direct coverage.
+# ---------------------------------------------------------------------------
+
+
+def test_month_condition_check_accepts_siege_48h_headsup(session: Session) -> None:
+    """month_condition='siege_48h_headsup' is accepted by the CHECK constraint."""
+    reminder = Reminder(
+        name="Siege48hHeadsup",
+        channel_id=_CHANNEL_ID,
+        weekday=6,
+        fire_time_utc=datetime.time(10, 0, 0),
+        message_template="test",
+        role_mention_id=None,
+        month_condition="siege_48h_headsup",
+    )
+    session.add(reminder)
+    session.commit()
+    session.refresh(reminder)
+    assert reminder.month_condition == "siege_48h_headsup"
+
+
+def test_month_condition_check_accepts_siege_24h_headsup(session: Session) -> None:
+    """month_condition='siege_24h_headsup' is accepted by the CHECK constraint."""
+    reminder = Reminder(
+        name="Siege24hHeadsup",
+        channel_id=_CHANNEL_ID,
+        weekday=0,
+        fire_time_utc=datetime.time(10, 0, 0),
+        message_template="test",
+        role_mention_id=None,
+        month_condition="siege_24h_headsup",
+    )
+    session.add(reminder)
+    session.commit()
+    session.refresh(reminder)
+    assert reminder.month_condition == "siege_24h_headsup"
+
+
+def test_month_condition_check_rejects_bogus_value(session: Session) -> None:
+    """month_condition CHECK rejects a value outside the widened four-value set.
+
+    The model-level CheckConstraint is enforced by SQLite when the table is
+    created via Base.metadata.create_all(), so an invalid value raises
+    IntegrityError at commit time — mirroring
+    test_delivery_target_check_rejects_invalid_value above.
+    """
+    reminder = Reminder(
+        name="BadMonthCondition",
+        channel_id=_CHANNEL_ID,
+        weekday=1,
+        fire_time_utc=datetime.time(7, 0, 0),
+        message_template="test",
+        role_mention_id=None,
+        month_condition="not_a_real_condition",
+    )
+    session.add(reminder)
+    with pytest.raises(IntegrityError):
+        session.commit()

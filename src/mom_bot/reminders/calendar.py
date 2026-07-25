@@ -1,6 +1,6 @@
 """Pure calendar predicates for Hydra Tank Week scheduling (#268).
 
-Provides three pure functions — no DB, no Discord dependency:
+Provides pure functions — no DB, no Discord dependency:
 
 - :func:`tank_week_ending_tuesday`: returns the first Tuesday of a given
   (year, month), which is the Tank Week ending Tuesday for that month.
@@ -8,6 +8,12 @@ Provides three pure functions — no DB, no Discord dependency:
   heads-up fire date (ending Tuesday − 7 days) for some month's tank week.
 - :func:`is_end_of_tank_date`: returns ``True`` iff *today* is the first
   Tuesday of its month (i.e. the tank-week ending Tuesday).
+- :func:`is_siege_start_date`: returns ``True`` iff *today* is a Siege
+  start date in the bi-weekly cycle.
+- :func:`is_siege_48h_headsup_date`: returns ``True`` iff *today* is two
+  days before a Siege start date.
+- :func:`is_siege_24h_headsup_date`: returns ``True`` iff *today* is one
+  day before a Siege start date.
 
 Design notes:
 - Tank Week is the Hydra clash that *ends* in a new month — the clash whose
@@ -26,12 +32,26 @@ from __future__ import annotations
 
 import calendar
 import datetime
+from typing import Final
 
 __all__ = [
     "tank_week_ending_tuesday",
     "is_tank_week_headsup_date",
     "is_end_of_tank_date",
+    "is_siege_start_date",
+    "is_siege_48h_headsup_date",
+    "is_siege_24h_headsup_date",
 ]
+
+SIEGE_ANCHOR_DATE: Final[datetime.date] = datetime.date(2026, 7, 21)
+"""Confirmed Siege start date from a maintainer comment on issue #325.
+
+Re-anchoring requires changing this hardcoded module constant and deploying
+the code; it is not stored as a KV secret or database value.
+"""
+
+SIEGE_PERIOD_DAYS: Final[int] = 14
+"""Number of days between Siege start dates."""
 
 
 def tank_week_ending_tuesday(year: int, month: int) -> datetime.date:
@@ -110,3 +130,59 @@ def is_tank_week_headsup_date(today: datetime.date) -> bool:
     ending = tank_week_ending_tuesday(candidate.year, candidate.month)
     headsup = ending - datetime.timedelta(days=7)
     return today == headsup
+
+
+def is_siege_start_date(today: datetime.date) -> bool:
+    """Return True iff *today* is a Siege start date.
+
+    Siege starts repeat every 14 days from :data:`SIEGE_ANCHOR_DATE`.
+    Python's modulo remains non-negative for dates before the anchor, so the
+    same calculation covers the full bi-weekly cycle in both directions.
+
+    Args:
+        today: The date to test.
+
+    Returns:
+        ``True`` if *today* is a Siege start date.
+        ``False`` otherwise.
+    """
+    offset = (today - SIEGE_ANCHOR_DATE).days % SIEGE_PERIOD_DAYS
+    return offset == 0
+
+
+def is_siege_48h_headsup_date(today: datetime.date) -> bool:
+    """Return True iff *today* is the 48-hour Siege heads-up date.
+
+    The 48-hour heads-up occurs two days before each bi-weekly Siege start,
+    at offset 12 in the 14-day cycle anchored by
+    :data:`SIEGE_ANCHOR_DATE`. Python's modulo handles pre-anchor dates
+    without special-casing.
+
+    Args:
+        today: The date to test.
+
+    Returns:
+        ``True`` if *today* is two days before a Siege start date.
+        ``False`` otherwise.
+    """
+    offset = (today - SIEGE_ANCHOR_DATE).days % SIEGE_PERIOD_DAYS
+    return offset == 12
+
+
+def is_siege_24h_headsup_date(today: datetime.date) -> bool:
+    """Return True iff *today* is the 24-hour Siege heads-up date.
+
+    The 24-hour heads-up occurs one day before each bi-weekly Siege start,
+    at offset 13 in the 14-day cycle anchored by
+    :data:`SIEGE_ANCHOR_DATE`. Python's modulo handles pre-anchor dates
+    without special-casing.
+
+    Args:
+        today: The date to test.
+
+    Returns:
+        ``True`` if *today* is one day before a Siege start date.
+        ``False`` otherwise.
+    """
+    offset = (today - SIEGE_ANCHOR_DATE).days % SIEGE_PERIOD_DAYS
+    return offset == 13
