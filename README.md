@@ -6,7 +6,7 @@ Discord bot consolidating two existing bots — `siege-web`'s notifications side
 
 ## What it does
 
-- **Reminders** — scheduled channel posts for Hydra and Chimera clashes, with a Tank Week variant that swaps in a heads-up and an end-of-clash message.
+- **Reminders** — scheduled channel posts for Hydra and Chimera clashes, with a Hydra Tank Week variant that swaps in a heads-up and an end-of-clash message.
 - **Per-member DM notifications** — officers schedule recurring reminders to individual members via `/member-notify-add`, `-list`, `-get`, `-update`, `-remove` (weekly / biweekly / monthly cadence).
 - **Day-role sync** — receives siege-web webhooks and applies/removes Discord day roles.
 - **Post-conditions** — `/post-conditions`, `/post-conditions-get`, `/post-conditions-set` proxy siege-web's preferences API so members can view and set post-condition priorities from Discord.
@@ -196,13 +196,6 @@ All workflows live in `.github/workflows/`:
 | `claude-ci-fix.yml` | `workflow_run` after `ci.yml` completes | Delegates to the shared `glitchwerks/github-actions` `ci-failure` reusable workflow to attempt an automated fix when CI fails |
 
 `prod-infra` is a GitHub Deployments environment used only as a queryable ledger of what `infra-deploy.yml` last applied — it does not gate anything today. See `infra/aad-runbook.md` for first-time provisioning and `RELEASING.md` for the tag → release → deploy sequence.
-
-## References
-
-- Framework plan: [`docs/superpowers/plans/2026-05-08-mom-bot-framework.md`](docs/superpowers/plans/2026-05-08-mom-bot-framework.md)
-- Release history: [`CHANGELOG.md`](CHANGELOG.md)
-- Release process: [`RELEASING.md`](RELEASING.md)
-- Active milestone: [Infra deploy-recency guardrail (#315)](https://github.com/glitchwerks/rsl-mom-bot/milestone/7)
 
 ## Versioning
 
