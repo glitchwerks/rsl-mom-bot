@@ -104,9 +104,9 @@ def _secret_side_effect(name: str) -> str:
 
 
 def test_seed_empty_table_inserts_hydra_and_chimera(session: Session, mock_bot: MagicMock) -> None:
-    """Empty table + valid KV + matching channel + matching role → four rows.
+    """Empty table + valid KV + matching channel + matching role → six rows.
 
-    All four rows share the resolved ``channel_id`` (snowflake from
+    All six rows share the resolved ``channel_id`` (snowflake from
     ``discord.utils.get`` on text_channels, #47) and have a non-NULL
     ``role_mention_id`` equal to the mocked role's snowflake (#51).
 
@@ -114,6 +114,8 @@ def test_seed_empty_table_inserts_hydra_and_chimera(session: Session, mock_bot: 
     Chimera: weekday=2, fire_time=12:00:00.
     Hydra Tank Week Heads-up: weekday=1, fire_time=07:00:00.
     Hydra Tank Week End: weekday=1, fire_time=07:00:00.
+    Siege 48h Heads-up: weekday=6, fire_time=10:00:00 (#325 Slice B).
+    Siege 24h Heads-up: weekday=0, fire_time=10:00:00 (#325 Slice B).
     """
     with patch(
         "mom_bot.reminders.seed.load_secret",
@@ -122,7 +124,7 @@ def test_seed_empty_table_inserts_hydra_and_chimera(session: Session, mock_bot: 
         _maybe_seed_reminders(session, mock_bot)
 
     count = session.scalar(select(func.count(Reminder.id)))
-    assert count == 4
+    assert count == 6
 
     hydra = session.execute(select(Reminder).where(Reminder.name == "Hydra")).scalar_one()
     assert hydra.weekday == 1
@@ -144,6 +146,35 @@ def test_seed_empty_table_inserts_hydra_and_chimera(session: Session, mock_bot: 
     assert hydra.channel_id == chimera.channel_id
     # Both rows share the single resolved role — verify equality.
     assert hydra.role_mention_id == chimera.role_mention_id
+
+    # Siege rows (#325 Slice B) — same channel/role resolution, new
+    # weekday/fire_time slots (Sunday/Monday 10:00 UTC, per plan §1).
+    from mom_bot.reminders.seed import (  # noqa: PLC0415
+        SIEGE_24H_HEADSUP_TEMPLATE,
+        SIEGE_48H_HEADSUP_TEMPLATE,
+    )
+
+    siege_48h = session.execute(
+        select(Reminder).where(Reminder.name == "Siege 48h Heads-up")
+    ).scalar_one()
+    assert siege_48h.weekday == 6
+    assert siege_48h.fire_time_utc == datetime.time(10, 0, 0)
+    assert siege_48h.month_condition == "siege_48h_headsup"
+    assert siege_48h.delivery_target == "channel"
+    assert siege_48h.message_template == SIEGE_48H_HEADSUP_TEMPLATE
+    assert siege_48h.channel_id == _CHANNEL_ID
+    assert siege_48h.role_mention_id == _ROLE_ID
+
+    siege_24h = session.execute(
+        select(Reminder).where(Reminder.name == "Siege 24h Heads-up")
+    ).scalar_one()
+    assert siege_24h.weekday == 0
+    assert siege_24h.fire_time_utc == datetime.time(10, 0, 0)
+    assert siege_24h.month_condition == "siege_24h_headsup"
+    assert siege_24h.delivery_target == "channel"
+    assert siege_24h.message_template == SIEGE_24H_HEADSUP_TEMPLATE
+    assert siege_24h.channel_id == _CHANNEL_ID
+    assert siege_24h.role_mention_id == _ROLE_ID
 
 
 def test_seed_non_empty_table_is_noop(session: Session, mock_bot: MagicMock) -> None:
@@ -307,7 +338,7 @@ def test_seed_role_mention_id_equals_mocked_role_snowflake(
     session: Session,
     mock_bot: MagicMock,
 ) -> None:
-    """Resolved role snowflake is stored in role_mention_id on all four rows.
+    """Resolved role snowflake is stored in role_mention_id on all six rows.
 
     Specifically verifies the resolved value equals the mocked role's
     ``.id`` attribute (not just any non-None value), mirroring the channel
@@ -320,7 +351,7 @@ def test_seed_role_mention_id_equals_mocked_role_snowflake(
         _maybe_seed_reminders(session, mock_bot)
 
     rows = session.execute(select(Reminder)).scalars().all()
-    assert len(rows) == 4
+    assert len(rows) == 6
     for row in rows:
         assert (
             row.role_mention_id is not None

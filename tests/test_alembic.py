@@ -429,41 +429,49 @@ class TestSiegeMonthConditionsMigration:
     """Chain and round-trip tests for the 0006 migration.
 
     Per the plan (docs/superpowers/plans/2026-07-25-325-siege-reminders.md
-    §4.2), the new migration's revision id is expected to be
-    ``0006_siege_month_conditions``, chained via
-    ``down_revision = "b6_new_member_alert_subscription"`` (the current
-    head as of #326). These tests pin that exact revision id rather than
-    only checking table presence, so they fail before 0006 exists (current
-    head is still ``b6_new_member_alert_subscription``) instead of passing
-    vacuously against the pre-#326 chain.
+    §4.2), the migration's revision id is ``0006_siege_month_conditions``,
+    chained via ``down_revision = "b6_new_member_alert_subscription"``.
+
+    These tests intentionally target the *literal* revision id
+    (``command.upgrade(cfg, self._EXPECTED_REVISION)``), never ``"head"`` —
+    0006 is no longer the alembic head once ``0007_siege_seed_rows`` lands
+    in Slice B (#327), and pinning to ``"head"`` here would make this
+    class's assertions flip-flop with whatever the *global* head happens
+    to be. The global "alembic heads == [X]" identity assertion belongs to
+    whichever migration is the current head — see
+    ``tests/test_reminders_siege_seed.py::TestSiegeSeedRowsMigration`` for
+    the 0007-owns-head-now version of that check.
     """
 
-    _EXPECTED_HEAD = "0006_siege_month_conditions"
+    _EXPECTED_REVISION = "0006_siege_month_conditions"
     _EXPECTED_PARENT = "b6_new_member_alert_subscription"
 
-    def test_alembic_heads_is_0006_siege_month_conditions(self) -> None:
-        """The sole alembic head is ``0006_siege_month_conditions``.
+    def test_0006_down_revision_chains_off_b6(self) -> None:
+        """0006's down_revision is b6_new_member_alert_subscription.
 
-        A second head would mean 0006's ``down_revision`` was set wrong
-        (e.g. left pointing at a revision another migration already
-        chains from), which ``alembic upgrade head`` cannot resolve. A
-        head that isn't 0006 at all means the migration hasn't been
-        added yet or chains from the wrong parent.
+        A wrong down_revision (e.g. left pointing at a revision another
+        migration already chains from) produces a second alembic head,
+        which ``alembic upgrade head`` cannot resolve. A revision that
+        isn't found at all means the migration hasn't been added yet or
+        was renamed.
         """
         cfg = Config(_ALEMBIC_INI)
         script = ScriptDirectory.from_config(cfg)
-        heads = script.get_heads()
-        assert heads == [self._EXPECTED_HEAD], (
-            f"Expected exactly one alembic head, {self._EXPECTED_HEAD!r}, " f"got: {heads}"
+        revision = script.get_revision(self._EXPECTED_REVISION)
+        assert revision.down_revision == self._EXPECTED_PARENT, (
+            f"Expected 0006's down_revision == {self._EXPECTED_PARENT!r}, "
+            f"got: {revision.down_revision!r}"
         )
 
-    def test_upgrade_head_then_downgrade_one_step_round_trips(self, tmp_path: Path) -> None:
-        """``upgrade head`` lands on 0006; ``downgrade -1`` returns to b6.
+    def test_upgrade_to_0006_then_downgrade_one_step_round_trips(self, tmp_path: Path) -> None:
+        """Upgrading to 0006 lands there; ``downgrade -1`` returns to b6.
 
         0006 only alters a CHECK constraint (a SQLite no-op per its
         ``_is_postgres()`` guard) — it must not drop or recreate the
         ``reminders`` table, and the round-trip must complete without
-        error on SQLite.
+        error on SQLite. Targets the literal revision id (not ``"head"``)
+        so this test's own coverage of 0006 stays stable once
+        ``0007_siege_seed_rows`` becomes the new head in Slice B.
 
         Args:
             tmp_path: pytest-supplied temp directory.
@@ -471,14 +479,14 @@ class TestSiegeMonthConditionsMigration:
         db_file = str(tmp_path / "test.db")
         cfg = _make_alembic_config(db_file)
 
-        command.upgrade(cfg, "head")
+        command.upgrade(cfg, self._EXPECTED_REVISION)
         engine = sa.create_engine(f"sqlite:///{db_file}")
         with engine.connect() as conn:
             heads_after_upgrade = MigrationContext.configure(conn).get_current_heads()
         tables_after_upgrade = _get_table_names(engine)
         engine.dispose()
-        assert heads_after_upgrade == (self._EXPECTED_HEAD,), (
-            f"Expected 'alembic upgrade head' to land on {self._EXPECTED_HEAD!r}, "
+        assert heads_after_upgrade == (self._EXPECTED_REVISION,), (
+            f"Expected upgrading to {self._EXPECTED_REVISION!r} to land there, "
             f"got: {heads_after_upgrade}"
         )
         assert "reminders" in tables_after_upgrade

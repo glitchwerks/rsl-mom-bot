@@ -70,7 +70,7 @@ from sqlalchemy.orm import Session
 from mom_bot.config import ConfigError, load_secret
 from mom_bot.reminders.models import Reminder
 
-__all__ = ["_maybe_seed_reminders", "seed_tank_week_reminders"]
+__all__ = ["_maybe_seed_reminders", "seed_siege_reminders", "seed_tank_week_reminders"]
 
 _logger = logging.getLogger(__name__)
 
@@ -180,6 +180,22 @@ HYDRA_TANK_WEEK_END_TEMPLATE: str = (
     "Bare minimum for the reward, nothing extra. Don't overhit."
 )
 
+# Siege message templates (officer-approved copy).
+# To revise wording: edit these constants and open a PR. Once migration
+# 0007 has run in prod, a copy revision also needs a further data migration
+# because 0007 is guarded by WHERE NOT EXISTS.
+SIEGE_48H_HEADSUP_TEMPLATE: str = (
+    ":crossed_swords: **Siege Incoming!** :crossed_swords:\n"
+    "Siege starts in 48 hours — set your defences and check your post assignment now!\n"
+    "An empty post is a free win for the other clan. Don't leave a hole in the line."
+)
+
+SIEGE_24H_HEADSUP_TEMPLATE: str = (
+    ":crossed_swords: **Siege — Final Day!** :crossed_swords:\n"
+    "There are less than 24 hours until Siege — lock in your defences and confirm your post!\n"
+    "Every missing player costs the clan points. Speak up now if you can't make it."
+)
+
 
 # ---------------------------------------------------------------------------
 # Public function
@@ -219,6 +235,8 @@ def _maybe_seed_reminders(
 
     - Hydra fires **Tuesday** (weekday=1) at **07:00 UTC**.
     - Chimera fires **Wednesday** (weekday=2) at **12:00 UTC**.
+    - Siege 48h Heads-up fires **Sunday** (weekday=6) at **10:00 UTC**.
+    - Siege 24h Heads-up fires **Monday** (weekday=0) at **10:00 UTC**.
 
     Args:
         session: An open :class:`~sqlalchemy.orm.Session` with write access
@@ -246,7 +264,8 @@ def _maybe_seed_reminders(
         return
 
     _logger.info(
-        "_maybe_seed_reminders: table empty; seeding Hydra, Chimera, " "and two tank-week rows"
+        "_maybe_seed_reminders: table empty; seeding Hydra, Chimera, "
+        "two tank-week rows, and two Siege rows"
     )
 
     try:
@@ -341,17 +360,126 @@ def _maybe_seed_reminders(
                 role_mention_id=role_mention_id,
                 month_condition="tank_week_end",
             ),
+            Reminder(
+                name="Siege 48h Heads-up",
+                channel_id=channel_id,
+                weekday=6,
+                fire_time_utc=datetime.time(10, 0, 0),
+                message_template=SIEGE_48H_HEADSUP_TEMPLATE,
+                role_mention_id=role_mention_id,
+                month_condition="siege_48h_headsup",
+                delivery_target="channel",
+            ),
+            Reminder(
+                name="Siege 24h Heads-up",
+                channel_id=channel_id,
+                weekday=0,
+                fire_time_utc=datetime.time(10, 0, 0),
+                message_template=SIEGE_24H_HEADSUP_TEMPLATE,
+                role_mention_id=role_mention_id,
+                month_condition="siege_24h_headsup",
+                delivery_target="channel",
+            ),
         ]
     )
     session.commit()
     _logger.info(
-        "_maybe_seed_reminders: seeded Hydra, Chimera, and two tank-week rows "
+        "_maybe_seed_reminders: seeded Hydra, Chimera, two tank-week rows, and two Siege rows "
         "(channel=%r → id=%d, role=%r → id=%d)",
         channel_name,
         channel_id,
         role_name,
         role_mention_id,
     )
+
+
+def seed_siege_reminders(session: Session) -> None:
+    """Insert Siege reminder rows into an already-seeded database.
+
+    This is the data-migration entry point for environments where Hydra and
+    Chimera were already seeded. The empty-table guard in
+    :func:`_maybe_seed_reminders` would never fire in those environments,
+    so this function provides the equivalent path.
+
+    Behavior:
+    - Copies ``channel_id`` and ``role_mention_id`` from the existing
+      ``Hydra`` row (no Discord gateway access at migration time).
+    - Each INSERT is guarded by a ``WHERE NOT EXISTS`` check on the row
+      name, so calling this function multiple times is idempotent.
+    - If no ``Hydra`` row exists (fresh/empty DB), the function is a
+      safe no-op — first-boot seeding covers that path instead.
+
+    Args:
+        session: An open :class:`~sqlalchemy.orm.Session` with write access
+            to the ``reminders`` table. The caller is responsible for
+            managing transaction scope; this function commits only the rows
+            it inserts.
+    """
+    from sqlalchemy import select  # local import to avoid circular at module level
+
+    hydra = session.execute(select(Reminder).where(Reminder.name == "Hydra")).scalar_one_or_none()
+
+    if hydra is None:
+        _logger.debug(
+            "seed_siege_reminders: no Hydra row found; "
+            "skipping (fresh-boot path will cover this)"
+        )
+        return
+
+    channel_id: int = hydra.channel_id
+    role_mention_id: int | None = hydra.role_mention_id
+
+    rows_to_insert = [
+        (
+            "Siege 48h Heads-up",
+            6,
+            "siege_48h_headsup",
+            SIEGE_48H_HEADSUP_TEMPLATE,
+        ),
+        (
+            "Siege 24h Heads-up",
+            0,
+            "siege_24h_headsup",
+            SIEGE_24H_HEADSUP_TEMPLATE,
+        ),
+    ]
+
+    inserted_names: list[str] = []
+    for name, weekday, condition, template in rows_to_insert:
+        existing = session.execute(
+            select(Reminder).where(Reminder.name == name)
+        ).scalar_one_or_none()
+        if existing is not None:
+            _logger.debug(
+                "seed_siege_reminders: row %r already exists; skipping",
+                name,
+            )
+            continue
+
+        session.add(
+            Reminder(
+                name=name,
+                channel_id=channel_id,
+                weekday=weekday,
+                fire_time_utc=datetime.time(10, 0, 0),
+                message_template=template,
+                role_mention_id=role_mention_id,
+                month_condition=condition,
+                delivery_target="channel",
+            )
+        )
+        inserted_names.append(name)
+
+    # Commit once after staging all new rows so both rows land atomically.
+    # A failure on the second row therefore cannot leave a half-seeded state.
+    if inserted_names:
+        session.commit()
+        for name in inserted_names:
+            _logger.info(
+                "seed_siege_reminders: inserted %r (channel_id=%d)",
+                name,
+                channel_id,
+            )
 
 
 def seed_tank_week_reminders(session: Session) -> None:
