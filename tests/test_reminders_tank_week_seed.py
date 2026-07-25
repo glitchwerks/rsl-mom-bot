@@ -5,8 +5,9 @@ Covers:
   'tank_week_headsup', and 'tank_week_end'.
 - delivery_target column exists, is NOT NULL, and defaults to 'channel'
   (verified via DB round-trip — server defaults only appear after commit).
-- _maybe_seed_reminders inserts four rows on an empty table (Hydra, Chimera,
-  TankHeadsup, TankEnd), with the two new rows sharing channel_id and
+- _maybe_seed_reminders inserts six rows on an empty table (Hydra, Chimera,
+  TankHeadsup, TankEnd, Siege48hHeadsup, Siege24hHeadsup — the two Siege
+  rows added by #325 Slice B), with the new rows sharing channel_id and
   role_mention_id from the Hydra row.
 - Data migration: a migration insert copies channel_id / role_mention_id
   from the existing Hydra row into the two new tank-week rows.
@@ -201,8 +202,9 @@ def test_delivery_target_defaults_to_channel_via_round_trip(
 # ---------------------------------------------------------------------------
 
 
-def test_seed_empty_table_inserts_four_rows(session: Session, mock_bot: MagicMock) -> None:
-    """Empty table + valid KV → four rows: Hydra, Chimera, TankHeadsup, TankEnd."""
+def test_seed_empty_table_inserts_six_rows(session: Session, mock_bot: MagicMock) -> None:
+    """Empty table + valid KV → six rows: Hydra, Chimera, TankHeadsup, TankEnd,
+    Siege48hHeadsup, Siege24hHeadsup (#325 Slice B)."""
     with patch(
         "mom_bot.reminders.seed.load_secret",
         side_effect=_secret_side_effect,
@@ -210,7 +212,7 @@ def test_seed_empty_table_inserts_four_rows(session: Session, mock_bot: MagicMoc
         _maybe_seed_reminders(session, mock_bot)
 
     count = session.scalar(select(func.count(Reminder.id)))
-    assert count == 4, f"Expected 4 seeded rows, got {count}"
+    assert count == 6, f"Expected 6 seeded rows, got {count}"
 
 
 def test_seed_tank_headsup_row_has_correct_attributes(
