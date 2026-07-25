@@ -1,4 +1,4 @@
-"""Verify Alembic migration 0002 against a live PostgreSQL 16 container.
+"""Verify Alembic migrations against a live PostgreSQL 16 container.
 
 Runs ``alembic upgrade head`` against a real Postgres instance spun up via
 testcontainers and asserts:
@@ -7,11 +7,15 @@ testcontainers and asserts:
 - The ``ck_fire_time_no_seconds`` CHECK constraint rejects rows where
   ``fire_time_utc`` has a non-zero seconds component.
 - A well-formed row (zero seconds) is accepted.
+- (#326) The ``ck_month_condition`` CHECK constraint, widened by migration
+  ``0006_siege_month_conditions``, still accepts the two pre-#326
+  tank-week values, accepts the two new Siege values, and rejects a
+  bogus value.
 
 Skipped cleanly when Docker is unavailable so CI without a Docker daemon
 does not break.
 
-References: issue #107 (Phase 2 Postgres-portability), issue #91.
+References: issue #107 (Phase 2 Postgres-portability), issue #91, #326.
 """
 
 from __future__ import annotations
@@ -297,3 +301,114 @@ class TestPostgresMigration:
         assert row[1] == snowflake, (
             f"role_mention_id round-trip failed: " f"inserted {snowflake}, got {row[1]}"
         )
+
+    # -----------------------------------------------------------------
+    # Migration 0006: widen ck_month_condition for Siege values (#326)
+    # -----------------------------------------------------------------
+
+    def test_check_accepts_existing_tank_week_headsup_value(self, pg_url: str) -> None:
+        """CHECK constraint still accepts 'tank_week_headsup' after 0006.
+
+        Migration 0006 widens ``ck_month_condition`` to add the two new
+        Siege values without narrowing or removing the two pre-#326
+        tank-week values.
+
+        Args:
+            pg_url: Connection string for the ephemeral Postgres container.
+        """
+        engine = sa.create_engine(pg_url)
+        with engine.begin() as conn:
+            conn.execute(
+                sa.text(
+                    "INSERT INTO reminders "
+                    "(name, channel_id, weekday, fire_time_utc,"
+                    " message_template, month_condition, created_at, updated_at) "
+                    "VALUES ('SiegeCheckTankHeadsup', 111, 1, '07:00:00',"
+                    " 'test', 'tank_week_headsup', NOW(), NOW())"
+                )
+            )
+        engine.dispose()
+
+    def test_check_accepts_existing_tank_week_end_value(self, pg_url: str) -> None:
+        """CHECK constraint still accepts 'tank_week_end' after 0006.
+
+        Args:
+            pg_url: Connection string for the ephemeral Postgres container.
+        """
+        engine = sa.create_engine(pg_url)
+        with engine.begin() as conn:
+            conn.execute(
+                sa.text(
+                    "INSERT INTO reminders "
+                    "(name, channel_id, weekday, fire_time_utc,"
+                    " message_template, month_condition, created_at, updated_at) "
+                    "VALUES ('SiegeCheckTankEnd', 111, 1, '07:00:00',"
+                    " 'test', 'tank_week_end', NOW(), NOW())"
+                )
+            )
+        engine.dispose()
+
+    def test_check_accepts_new_siege_48h_headsup_value(self, pg_url: str) -> None:
+        """CHECK constraint accepts the new 'siege_48h_headsup' value.
+
+        Regression coverage for the §4.1 "two sources" hazard: this
+        asserts the Postgres-side constraint directly, not just that the
+        SQLite/ORM-side tests pass.
+
+        Args:
+            pg_url: Connection string for the ephemeral Postgres container.
+        """
+        engine = sa.create_engine(pg_url)
+        with engine.begin() as conn:
+            conn.execute(
+                sa.text(
+                    "INSERT INTO reminders "
+                    "(name, channel_id, weekday, fire_time_utc,"
+                    " message_template, month_condition, created_at, updated_at) "
+                    "VALUES ('SiegeCheckNew48h', 111, 6, '10:00:00',"
+                    " 'test', 'siege_48h_headsup', NOW(), NOW())"
+                )
+            )
+        engine.dispose()
+
+    def test_check_accepts_new_siege_24h_headsup_value(self, pg_url: str) -> None:
+        """CHECK constraint accepts the new 'siege_24h_headsup' value.
+
+        Args:
+            pg_url: Connection string for the ephemeral Postgres container.
+        """
+        engine = sa.create_engine(pg_url)
+        with engine.begin() as conn:
+            conn.execute(
+                sa.text(
+                    "INSERT INTO reminders "
+                    "(name, channel_id, weekday, fire_time_utc,"
+                    " message_template, month_condition, created_at, updated_at) "
+                    "VALUES ('SiegeCheckNew24h', 111, 0, '10:00:00',"
+                    " 'test', 'siege_24h_headsup', NOW(), NOW())"
+                )
+            )
+        engine.dispose()
+
+    def test_check_rejects_bogus_month_condition_value(self, pg_url: str) -> None:
+        """CHECK constraint rejects a value outside the widened four-value set.
+
+        Expects ``IntegrityError`` from ``ck_month_condition`` when
+        ``month_condition`` is a value the constraint does not allow.
+
+        Args:
+            pg_url: Connection string for the ephemeral Postgres container.
+        """
+        engine = sa.create_engine(pg_url)
+        with pytest.raises(sa.exc.IntegrityError):
+            with engine.begin() as conn:
+                conn.execute(
+                    sa.text(
+                        "INSERT INTO reminders "
+                        "(name, channel_id, weekday, fire_time_utc,"
+                        " message_template, month_condition, created_at, updated_at) "
+                        "VALUES ('SiegeCheckBogus', 111, 1, '07:00:00',"
+                        " 'test', 'not_a_real_condition', NOW(), NOW())"
+                    )
+                )
+        engine.dispose()

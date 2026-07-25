@@ -12,6 +12,7 @@ import pytest
 import sqlalchemy as sa
 from alembic import command
 from alembic.config import Config
+from alembic.runtime.migration import MigrationContext
 from alembic.script import ScriptDirectory
 
 # Resolve alembic.ini relative to this test file so the path works on both
@@ -411,3 +412,88 @@ class TestRemindersSchema:
         assert (
             "reminder_sent" not in tables_after_downgrade
         ), "'reminder_sent' should not exist after downgrade to base"
+
+
+# ---------------------------------------------------------------------------
+# Migration 0006_siege_month_conditions (#326)
+#
+# 0006 widens ck_month_condition to add 'siege_48h_headsup' and
+# 'siege_24h_headsup'. Postgres-side CHECK-constraint enforcement is
+# covered separately in tests/test_alembic_postgres.py (0006 is a SQLite
+# no-op by design, per its _is_postgres() guard — see 0004's precedent).
+# These tests cover the chain/round-trip behavior on SQLite.
+# ---------------------------------------------------------------------------
+
+
+class TestSiegeMonthConditionsMigration:
+    """Chain and round-trip tests for the 0006 migration.
+
+    Per the plan (docs/superpowers/plans/2026-07-25-325-siege-reminders.md
+    §4.2), the new migration's revision id is expected to be
+    ``0006_siege_month_conditions``, chained via
+    ``down_revision = "b6_new_member_alert_subscription"`` (the current
+    head as of #326). These tests pin that exact revision id rather than
+    only checking table presence, so they fail before 0006 exists (current
+    head is still ``b6_new_member_alert_subscription``) instead of passing
+    vacuously against the pre-#326 chain.
+    """
+
+    _EXPECTED_HEAD = "0006_siege_month_conditions"
+    _EXPECTED_PARENT = "b6_new_member_alert_subscription"
+
+    def test_alembic_heads_is_0006_siege_month_conditions(self) -> None:
+        """The sole alembic head is ``0006_siege_month_conditions``.
+
+        A second head would mean 0006's ``down_revision`` was set wrong
+        (e.g. left pointing at a revision another migration already
+        chains from), which ``alembic upgrade head`` cannot resolve. A
+        head that isn't 0006 at all means the migration hasn't been
+        added yet or chains from the wrong parent.
+        """
+        cfg = Config(_ALEMBIC_INI)
+        script = ScriptDirectory.from_config(cfg)
+        heads = script.get_heads()
+        assert heads == (self._EXPECTED_HEAD,), (
+            f"Expected exactly one alembic head, {self._EXPECTED_HEAD!r}, " f"got: {heads}"
+        )
+
+    def test_upgrade_head_then_downgrade_one_step_round_trips(self, tmp_path: Path) -> None:
+        """``upgrade head`` lands on 0006; ``downgrade -1`` returns to b6.
+
+        0006 only alters a CHECK constraint (a SQLite no-op per its
+        ``_is_postgres()`` guard) — it must not drop or recreate the
+        ``reminders`` table, and the round-trip must complete without
+        error on SQLite.
+
+        Args:
+            tmp_path: pytest-supplied temp directory.
+        """
+        db_file = str(tmp_path / "test.db")
+        cfg = _make_alembic_config(db_file)
+
+        command.upgrade(cfg, "head")
+        engine = sa.create_engine(f"sqlite:///{db_file}")
+        with engine.connect() as conn:
+            heads_after_upgrade = MigrationContext.configure(conn).get_current_heads()
+        tables_after_upgrade = _get_table_names(engine)
+        engine.dispose()
+        assert heads_after_upgrade == (self._EXPECTED_HEAD,), (
+            f"Expected 'alembic upgrade head' to land on {self._EXPECTED_HEAD!r}, "
+            f"got: {heads_after_upgrade}"
+        )
+        assert "reminders" in tables_after_upgrade
+
+        command.downgrade(cfg, "-1")
+        engine = sa.create_engine(f"sqlite:///{db_file}")
+        with engine.connect() as conn:
+            heads_after_downgrade = MigrationContext.configure(conn).get_current_heads()
+        tables_after_downgrade = _get_table_names(engine)
+        engine.dispose()
+        assert heads_after_downgrade == (self._EXPECTED_PARENT,), (
+            f"Expected 'alembic downgrade -1' from 0006 to land back on "
+            f"{self._EXPECTED_PARENT!r}, got: {heads_after_downgrade}"
+        )
+        assert "reminders" in tables_after_downgrade, (
+            "'reminders' table must survive a single-step downgrade of the "
+            "CHECK-constraint-only 0006 migration"
+        )

@@ -6,6 +6,10 @@ Covers:
 - is_tank_week_headsup_date predicate.
 - is_end_of_tank_date predicate.
 - Cross-month and cross-year boundary cases.
+- is_siege_48h_headsup_date / is_siege_24h_headsup_date predicates (#326):
+  bi-weekly (14-day cadence) Siege heads-up dates anchored at
+  2026-07-21 (Tuesday), fired on the Sunday (T-48h) and Monday (T-24h)
+  preceding each Siege start.
 
 No DB or Discord dependency — all tests are pure date arithmetic.
 """
@@ -17,7 +21,10 @@ import datetime
 import pytest
 
 from mom_bot.reminders.calendar import (
+    SIEGE_ANCHOR_DATE,
     is_end_of_tank_date,
+    is_siege_24h_headsup_date,
+    is_siege_48h_headsup_date,
     is_tank_week_headsup_date,
     tank_week_ending_tuesday,
 )
@@ -213,3 +220,206 @@ def test_predicate_truth_table(
     """Both predicates agree on their respective trigger dates and are silent otherwise."""
     assert is_tank_week_headsup_date(date) is expected_headsup
     assert is_end_of_tank_date(date) is expected_end
+
+
+# ---------------------------------------------------------------------------
+# Siege bi-weekly heads-up predicates (#326)
+#
+# Anchor: Siege starts Tuesday 2026-07-21, 10:00 UTC, cadence every 14 days
+# (confirmed on issue #325's comment thread — see plan
+# docs/superpowers/plans/2026-07-25-325-siege-reminders.md §3.1/§7 D0).
+# T-48h fires on the preceding Sunday, T-24h on the preceding Monday.
+# offset = (d - SIEGE_ANCHOR_DATE).days % 14; T-48h ⟺ offset == 12,
+# T-24h ⟺ offset == 13. Python's ``%`` is non-negative for a positive
+# divisor, so pre-anchor dates resolve correctly with no special-casing.
+# ---------------------------------------------------------------------------
+
+
+def test_siege_anchor_is_a_tuesday() -> None:
+    """Fixture guard: SIEGE_ANCHOR_DATE (2026-07-21) must be a Tuesday."""
+    assert SIEGE_ANCHOR_DATE == datetime.date(2026, 7, 21)
+    assert SIEGE_ANCHOR_DATE.weekday() == 1, "fixture: SIEGE_ANCHOR_DATE must be a Tuesday"
+
+
+@pytest.mark.parametrize(
+    "date",
+    [
+        datetime.date(2026, 8, 2),
+        datetime.date(2026, 8, 16),
+        datetime.date(2026, 8, 30),
+    ],
+)
+def test_siege_48h_headsup_true_on_cycle_sundays(date: datetime.date) -> None:
+    """is_siege_48h_headsup_date is True on the three Sundays after the anchor."""
+    assert date.weekday() == 6, "fixture: expected date must be a Sunday"
+    assert is_siege_48h_headsup_date(date) is True
+
+
+@pytest.mark.parametrize(
+    "date",
+    [
+        datetime.date(2026, 8, 9),
+        datetime.date(2026, 8, 23),
+    ],
+)
+def test_siege_48h_headsup_false_on_off_cycle_sundays(date: datetime.date) -> None:
+    """is_siege_48h_headsup_date is False on Sundays one week off the 14-day cycle."""
+    assert date.weekday() == 6, "fixture: expected date must be a Sunday"
+    assert is_siege_48h_headsup_date(date) is False
+
+
+@pytest.mark.parametrize(
+    "date",
+    [
+        datetime.date(2026, 8, 3),
+        datetime.date(2026, 8, 17),
+        datetime.date(2026, 8, 31),
+    ],
+)
+def test_siege_24h_headsup_true_on_cycle_mondays(date: datetime.date) -> None:
+    """is_siege_24h_headsup_date is True on the three Mondays after the anchor."""
+    assert date.weekday() == 0, "fixture: expected date must be a Monday"
+    assert is_siege_24h_headsup_date(date) is True
+
+
+@pytest.mark.parametrize(
+    "date",
+    [
+        datetime.date(2026, 8, 10),
+        datetime.date(2026, 8, 24),
+    ],
+)
+def test_siege_24h_headsup_false_on_off_cycle_mondays(date: datetime.date) -> None:
+    """is_siege_24h_headsup_date is False on Mondays one week off the 14-day cycle."""
+    assert date.weekday() == 0, "fixture: expected date must be a Monday"
+    assert is_siege_24h_headsup_date(date) is False
+
+
+def test_siege_48h_headsup_true_on_pre_anchor_date() -> None:
+    """Pins Python's non-negative modulo for dates before the anchor.
+
+    2026-07-19 is the Sunday two days before the anchor itself
+    (2026-07-21) — the very first T-48h heads-up date in the cycle,
+    even though it precedes the anchor date. A future refactor that
+    swaps ``%`` for ``math.fmod``/``abs()`` would break this.
+    """
+    date = datetime.date(2026, 7, 19)
+    assert date.weekday() == 6, "fixture: expected date must be a Sunday"
+    assert (date - SIEGE_ANCHOR_DATE).days == -2
+    assert is_siege_48h_headsup_date(date) is True
+
+
+def test_siege_24h_headsup_true_on_pre_anchor_date() -> None:
+    """Pins Python's non-negative modulo for dates before the anchor.
+
+    2026-07-20 is the Monday one day before the anchor (2026-07-21) —
+    the very first T-24h heads-up date in the cycle.
+    """
+    date = datetime.date(2026, 7, 20)
+    assert date.weekday() == 0, "fixture: expected date must be a Monday"
+    assert (date - SIEGE_ANCHOR_DATE).days == -1
+    assert is_siege_24h_headsup_date(date) is True
+
+
+@pytest.mark.parametrize(
+    "date",
+    [
+        datetime.date(2026, 7, 21),  # the anchor itself (Tuesday)
+        datetime.date(2026, 8, 1),  # Saturday
+        datetime.date(2026, 8, 3),  # an on-cycle T-24h Monday
+        datetime.date(2026, 8, 4),  # Tuesday
+    ],
+)
+def test_siege_48h_headsup_false_on_non_sunday(date: datetime.date) -> None:
+    """is_siege_48h_headsup_date is False for any non-Sunday date."""
+    assert date.weekday() != 6
+    assert is_siege_48h_headsup_date(date) is False
+
+
+@pytest.mark.parametrize(
+    "date",
+    [
+        datetime.date(2026, 7, 21),  # the anchor itself (Tuesday)
+        datetime.date(2026, 8, 1),  # Saturday
+        datetime.date(2026, 8, 2),  # an on-cycle T-48h Sunday
+        datetime.date(2026, 8, 4),  # Tuesday
+    ],
+)
+def test_siege_24h_headsup_false_on_non_monday(date: datetime.date) -> None:
+    """is_siege_24h_headsup_date is False for any non-Monday date."""
+    assert date.weekday() != 0
+    assert is_siege_24h_headsup_date(date) is False
+
+
+def test_siege_headsup_weekday_implication_sweep() -> None:
+    """§3.2 mitigation: over a multi-year sweep, True implies the exact weekday.
+
+    Guards against the double-encoding hazard where the mod-14 predicate
+    and the seeded row's ``weekday`` column silently disagree — a
+    disagreement that produces no error and no fired reminder.
+    """
+    start = datetime.date(2025, 1, 1)
+    end = datetime.date(2029, 12, 31)
+    day = start
+    one_day = datetime.timedelta(days=1)
+    checked_48h = checked_24h = 0
+    while day <= end:
+        if is_siege_48h_headsup_date(day):
+            assert day.weekday() == 6, f"T-48h fired on a non-Sunday: {day}"
+            checked_48h += 1
+        if is_siege_24h_headsup_date(day):
+            assert day.weekday() == 0, f"T-24h fired on a non-Monday: {day}"
+            checked_24h += 1
+        day += one_day
+    # Sanity: the sweep actually exercised both predicates many times.
+    assert checked_48h > 100
+    assert checked_24h > 100
+
+
+def test_siege_headsup_density_sweep() -> None:
+    """Exactly one T-48h and one T-24h date occur per 14-day window.
+
+    Over a multi-year sweep, consecutive firing dates for each predicate
+    are always exactly 14 days apart, and the two predicates never fire
+    on the same calendar date.
+    """
+    start = datetime.date(2025, 1, 1)
+    end = datetime.date(2029, 12, 31)
+    day = start
+    one_day = datetime.timedelta(days=1)
+    headsup_48h: list[datetime.date] = []
+    headsup_24h: list[datetime.date] = []
+    while day <= end:
+        if is_siege_48h_headsup_date(day):
+            headsup_48h.append(day)
+        if is_siege_24h_headsup_date(day):
+            headsup_24h.append(day)
+        day += one_day
+
+    # strict=False: pairwise zip of a list with its own tail is
+    # intentionally one element shorter on the right.
+    for earlier, later in zip(headsup_48h, headsup_48h[1:], strict=False):
+        assert (later - earlier).days == 14
+
+    for earlier, later in zip(headsup_24h, headsup_24h[1:], strict=False):
+        assert (later - earlier).days == 14
+
+    assert set(headsup_48h).isdisjoint(headsup_24h)
+
+
+def test_siege_headsup_does_not_interfere_with_tank_week_predicates() -> None:
+    """Tank-week predicates never fire on the Siege weekdays.
+
+    They are Tuesday-only, so they can never collide with Sunday=6 or
+    Monday=0. §3.2 requires this be asserted, not assumed, so a future
+    change to either predicate family is caught.
+    """
+    start = datetime.date(2025, 1, 1)
+    end = datetime.date(2029, 12, 31)
+    day = start
+    one_day = datetime.timedelta(days=1)
+    while day <= end:
+        if day.weekday() in (6, 0):
+            assert is_tank_week_headsup_date(day) is False
+            assert is_end_of_tank_date(day) is False
+        day += one_day
