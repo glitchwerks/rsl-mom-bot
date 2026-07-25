@@ -12,6 +12,9 @@ name: Deploy infra (Bicep apply)
 # What-if preview (informational, PR-gated) lives in infra-what-if.yml — leave
 # that workflow alone. This file is the apply companion.
 #
+# Successful applies are recorded as GitHub Deployments on the `prod-infra`
+# environment. See #315 for the deployment-recording rationale.
+#
 # Reference: https://github.com/glitchwerks/mom-bot/issues/83
 
 on:
@@ -30,6 +33,7 @@ concurrency:
 permissions:
   id-token: write  # required for OIDC federated login to Azure
   contents: read   # actions/checkout
+  deployments: write  # record successful applies against prod-infra
 
 jobs:
   deploy:
@@ -41,6 +45,13 @@ jobs:
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4.3.1
         with:
           ref: ${{ inputs.commit_sha != '' && inputs.commit_sha || github.ref }}
+
+      - name: Capture Deployed SHA
+        id: capture_deployed_sha
+        run: |
+          DEPLOYED_SHA=$(git rev-parse HEAD)
+          echo "deployed_sha=$DEPLOYED_SHA" >> "$GITHUB_OUTPUT"
+          echo "Resolved deployed SHA: $DEPLOYED_SHA"
 
       - name: Azure login (OIDC — no client secret)
         uses: azure/login@a457da9ea143d694b1b9c7c869ebb04ebe844ef5  # v2
@@ -96,7 +107,62 @@ jobs:
             echo "| Deployment name | \`infra-${{ github.run_id }}\` |"
             echo "| Subscription | \`${{ vars.AZURE_SUBSCRIPTION_ID }}\` |"
             echo "| Run | [${{ github.run_id }}](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}) |"
+            echo "| Recorded deployment SHA | \`${{ steps.capture_deployed_sha.outputs.deployed_sha }}\` |"
             echo
             echo "To inspect in the Azure portal, navigate to:"
             echo "\`Subscriptions → ${{ vars.AZURE_SUBSCRIPTION_ID }} → Deployments → infra-${{ github.run_id }}\`"
           } >> "$GITHUB_STEP_SUMMARY"
+
+      # UNVERIFIED: whether POST /deployments auto-creates the prod-infra GitHub
+      # environment, or whether it must be pre-created under repo Settings > Environments,
+      # is not confirmed at write time. If this step fails with a 422, that is the first
+      # thing to check.
+      - name: Record GitHub Deployment
+        if: success()
+        env:
+          DEPLOYED_SHA: ${{ steps.capture_deployed_sha.outputs.deployed_sha }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set +e
+          DEPLOYMENT_RESPONSE=$(gh api --method POST \
+            "/repos/${{ github.repository }}/deployments" \
+            --input - <<EOF
+          {
+            "ref": "$DEPLOYED_SHA",
+            "environment": "prod-infra",
+            "task": "deploy:infra",
+            "auto_merge": false,
+            "required_contexts": [],
+            "description": "Bicep apply via run ${{ github.run_id }}",
+            "payload": {
+              "run_url": "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+            }
+          }
+          EOF
+          )
+          RC=$?
+          set -e
+          if [ $RC -ne 0 ]; then
+            echo "::error::GitHub deployment was not created (gh api exited $RC)."
+            echo "::error::If the deployment-create call failed with a 422, the 'prod-infra' environment may need to be pre-created under repo Settings > Environments before this workflow can succeed."
+            exit 1
+          fi
+
+          set +e
+          DEPLOYMENT_ID=$(jq -er '.id | numbers' <<< "$DEPLOYMENT_RESPONSE")
+          RC=$?
+          set -e
+          if [ $RC -ne 0 ] || [ -z "$DEPLOYMENT_ID" ]; then
+            echo "::error::GitHub deployment was not created: the API response did not contain a numeric deployment id."
+            echo "::error::If the deployment-create call failed with a 422, the 'prod-infra' environment may need to be pre-created under repo Settings > Environments before this workflow can succeed."
+            exit 1
+          fi
+
+          gh api --method POST \
+            "/repos/${{ github.repository }}/deployments/${DEPLOYMENT_ID}/statuses" \
+            --input - <<EOF
+          {
+            "state": "success",
+            "description": "Bicep apply ${{ github.run_id }}"
+          }
+          EOF
