@@ -2,30 +2,23 @@
 
 Discord bot consolidating two existing bots — `siege-web`'s notifications sidecar and the reminder system from `I:\games\raid\siege\clan\` — into a single bot with interactive slash commands.
 
-**Status:** v1.0 shipped (2026-05-26) — full sidecar + reminder bot consolidation, interactive slash commands, PostgreSQL on Azure. v1.1 in progress ([milestone #3](https://github.com/glitchwerks/rsl-mom-bot/milestone/3)) — infra + documentation hardening: UAMI migration job, KV-secret parameterisation, ACA ingress audit, dead-mount cleanup, observability wire-up, plus a documentation correctness sweep. Manual Azure provisioning for new environments requires the AAD preflight steps in `infra/aad-runbook.md`.
+## What it does
+
+- **Reminders** — scheduled channel posts for Hydra and Chimera clashes, with a Hydra Tank Week variant that swaps in a heads-up and an end-of-clash message.
+- **Per-member DM notifications** — officers schedule recurring reminders to individual members via `/member-notify-add`, `-list`, `-get`, `-update`, `-remove` (weekly / biweekly / monthly cadence).
+- **Day-role sync** — receives siege-web webhooks and applies/removes Discord day roles.
+- **Post-conditions** — `/post-conditions`, `/post-conditions-get`, `/post-conditions-set` proxy siege-web's preferences API so members can view and set post-condition priorities from Discord.
+- **New-member onboarding** — new joiners get an automatic welcome message asking for a profile screenshot; officers can subscribe to join alerts via `/notify-new-members`; members who post nothing within 24h receive a heads-up DM and are removed from the server.
+- **`/ping`** — health check (version + uptime).
+- **Sidecar HTTP API** — FastAPI service on port 8001 backing the siege-web integrations above.
+
+See `CHANGELOG.md` for the full, dated history of every feature and fix, and the framework plan below for the original design rationale.
 
 ## Documentation
 
-- **Framework plan:** [`docs/superpowers/plans/2026-05-08-mom-bot-framework.md`](docs/superpowers/plans/2026-05-08-mom-bot-framework.md) — locked design decisions, phasing, risks, and verification per epic
-- **Cross-repo dependency:** Epic 2.5 lands as a v1.2 ticket in [glitchwerks/siege-web](https://github.com/glitchwerks/siege-web)
-
-## Roadmap
-
-The plan defines 5 epics + 1 cross-cut + 1 pre-epic gate:
-
-| Phase | Scope | Status |
-| --- | --- | --- |
-| **Pre-Epic-0** | Discord application audit + reminder-bot deployment typing (gates Epic 0) | Shipped (v1.0) |
-| **Epic 0** | Skeleton: new repo wiring, Discord client, App Insights, SQLite baseline, `/ping` health-check | Shipped (v1.0) |
-| **Epic 1** | Reminder lift-and-shift (port from `siege/clan/`; JSON file → SQLite) | Shipped (v1.0) |
-| **Epic 2** | Sidecar lift-and-shift (port `siege-web/bot/`'s 6 HTTP endpoints into mom_bot's service half) | Shipped (v1.0, #128) |
-| **Epic 2.5** | Siege-web cross-cut (`/me/preferences` endpoints + `X-Acting-Discord-Id` header support — lands in siege-web v1.2) | Open (siege-web v1.2) |
-| **Epic 2.6** | Day-role sync — `POST /api/internal/role-sync` + `mom_bot/roles/` service | Shipped (v1.0, #6) |
-| **Epic 3** | Interactive slash commands (`/post-conditions catalog`, `/post-conditions me`) | Shipped (v1.0) |
-| **Epic 4** | Cutover (deploy to Azure RG `mom-bot`, retire siege-bot + old reminder-bot) | Shipped (v1.0) |
-| **PostgreSQL migration** | Replace SQLite-on-SMB with Postgres Flexible Server + AAD token auth | Shipped (v1.0, #91) |
-
-See the framework plan for design decisions, scope locks, risks, and verification per epic.
+- **Framework plan:** [`docs/superpowers/plans/2026-05-08-mom-bot-framework.md`](docs/superpowers/plans/2026-05-08-mom-bot-framework.md) — locked design decisions, phasing, risks, and verification for the original v1.0 build-out (epics 0-4 + the PostgreSQL migration)
+- **Release history:** [`CHANGELOG.md`](CHANGELOG.md) (Keep a Changelog format) and the [GitHub Releases page](https://github.com/glitchwerks/rsl-mom-bot/releases)
+- **Release process:** [`RELEASING.md`](RELEASING.md) — tag/version/deploy procedure
 
 ## Prerequisites
 
@@ -94,7 +87,13 @@ az role assignment create \
 
 ```bash
 # MOM_BOT_ENV=dev causes config.load_secret() to read dev-* secrets from KV.
-MOM_BOT_ENV=dev python -m mom_bot
+MOM_BOT_ENV=dev .venv/Scripts/python.exe -m mom_bot          # Windows (Git Bash)
+# MOM_BOT_ENV=dev .venv/bin/python -m mom_bot                # Linux / macOS
+```
+
+```powershell
+# PowerShell equivalent:
+$env:MOM_BOT_ENV = "dev"; .\.venv\Scripts\python.exe -m mom_bot
 ```
 
 `DefaultAzureCredential` picks up your `az login` session automatically — no
@@ -161,43 +160,20 @@ mom-bot/
 │       ├── __main__.py                 # `python -m mom_bot` entrypoint
 │       ├── main.py                     # Discord client, intents, slash commands
 │       ├── config.py                   # MOM_BOT_ENV-aware config + KV secret load
-│       ├── db/
-│       │   └── __init__.py             # SQLAlchemy DeclarativeBase
-│       ├── health/
-│       │   ├── __init__.py
-│       │   └── liveness.py             # /health/* liveness/readiness probes
-│       ├── post_conditions/            # Siege post-conditions: grid layout, Discord views, slash commands
-│       │   ├── client.py
-│       │   ├── commands.py
-│       │   ├── discord_display.py
-│       │   ├── grid_layout.py
-│       │   ├── grouping.py
-│       │   └── views.py
-│       ├── reminders/                  # Reminder system (Epic 1 lift-and-shift)
-│       │   ├── __init__.py
-│       │   ├── models.py
-│       │   ├── scheduler.py
-│       │   ├── seed.py
-│       │   └── sent_store.py
-│       ├── roles/                      # Day-role sync (Epic 2.6)
-│       │   ├── __init__.py
-│       │   ├── models.py
-│       │   ├── seed.py
-│       │   └── service.py
-│       └── sidecar/                    # HTTP sidecar (Epic 2 lift-and-shift)
-│           ├── __init__.py
-│           ├── app.py
-│           ├── auth.py
-│           └── models.py
-├── migrations/                         # Alembic migration scripts
-│   ├── env.py                          # Wired to Base.metadata; reads MOM_BOT_DATABASE_URL
-│   ├── script.py.mako                  # Migration file template
-│   └── versions/                       # Migration history (baseline + 4 revisions)
-├── tests/                              # Pytest suite (unit + integration)
-│   ├── post_conditions/
-│   ├── roles/
-│   ├── sidecar/
-│   └── test_*.py                       # Top-level smoke, config, alembic, health tests
+│       ├── discord_authz.py            # Shared `require_manage_guild` authorization decorator
+│       ├── telemetry.py                # OpenTelemetry / Azure Monitor wiring
+│       ├── db/                         # SQLAlchemy DeclarativeBase
+│       ├── health/                     # /health/* liveness/readiness probes
+│       ├── migrations/                 # UAMI Container Apps Job entrypoint (acquire_token.py)
+│       ├── post_conditions/            # `/post-conditions*` — siege-web preferences proxy
+│       ├── reminders/                  # Channel reminders (Hydra/Chimera + Tank Week calendar logic)
+│       ├── roles/                      # Day-role sync (`POST /api/internal/role-sync`)
+│       ├── member_notifications/       # `/member-notify-*` per-member DM notification commands
+│       ├── new_member_alerts/          # `/notify-new-members` officer join-alert subscriptions
+│       ├── member_activity/            # 24h silent-joiner tracking + auto-kick
+│       └── sidecar/                    # HTTP sidecar (FastAPI, port 8001)
+├── migrations/                         # Alembic migration scripts (env.py, script.py.mako, versions/)
+├── tests/                              # Pytest suite (unit + integration): per-package subdirectories plus top-level test modules
 ├── alembic.ini                         # Alembic config (local SQLite default)
 ├── docs/                               # Design docs, secrets inventory, framework plan
 ├── infra/                              # Bicep templates + AAD runbook
@@ -206,14 +182,27 @@ mom-bot/
 └── .dockerignore
 ```
 
-## References
+## CI Workflows
 
-- Framework plan: [`docs/superpowers/plans/2026-05-08-mom-bot-framework.md`](docs/superpowers/plans/2026-05-08-mom-bot-framework.md)
-- Active milestone: [mom-bot v1.1 — infra + doc hardening](https://github.com/glitchwerks/rsl-mom-bot/milestone/3)
+All workflows live in `.github/workflows/`:
+
+| Workflow | Trigger | Purpose |
+| --- | --- | --- |
+| `ci.yml` | PR, push to `main` | Lint (ruff + `uv lock --check`), format check (black), type check (mypy), pytest, Docker build smoke test, shellcheck, pip-audit (non-blocking) |
+| `build-image.yml` | `workflow_run` after `ci.yml` succeeds on `main` | Builds and pushes the `:<sha>` GHCR image — structurally guaranteed to run only after CI is green for that exact SHA |
+| `deploy.yml` | Manual (`workflow_dispatch`) | Deploys a commit's image to the prod Container App: verifies the GHCR image exists, runs Alembic migrations via a Container Apps Job, then updates `ca-mom-bot` |
+| `infra-deploy.yml` | Manual (`workflow_dispatch`) | Applies Bicep templates to the prod subscription (mutates live Azure infra); records the deployed commit as a GitHub Deployment on the `prod-infra` environment (#321) |
+| `infra-what-if.yml` | PR touching `infra/**` | Posts an `az deployment sub create --what-if` diff as a PR comment; informational only, not a merge gate |
+| `release.yml` | Push of a `v*` tag | Publishes a GitHub Release (notes from `CHANGELOG.md`) and an immutable `:vX.Y.Z` GHCR image; posts the Discord release announcement |
+| `notify-discord-release.yml` | Manual (`workflow_dispatch`) | Re-posts the Discord release announcement for a given tag if the automatic post in `release.yml` failed |
+| `claude.yml` | Issue/PR comment created, PR review submitted, or issue opened/assigned | Delegates to the shared `glitchwerks/github-actions` `claude-tag-respond` reusable workflow (authorized users only) |
+| `claude-ci-fix.yml` | `workflow_run` after `ci.yml` completes | Delegates to the shared `glitchwerks/github-actions` `ci-failure` reusable workflow to attempt an automated fix when CI fails |
+
+`prod-infra` is a GitHub Deployments environment used only as a queryable ledger of what `infra-deploy.yml` last applied — it does not gate anything today. See `infra/aad-runbook.md` for first-time provisioning and `RELEASING.md` for the tag → release → deploy sequence.
 
 ## Versioning
 
-Mom-bot is its own product on its own version track (`mom-bot v0.1` → `v1.0`), separate from siege-web. The runtime is coupled to siege-web by design (shared Discord token, sidecar HTTP contract, shared guild) — the separate-repo / separate-versioning is for code-organization clarity, not real separability.
+Mom-bot is its own product on its own version track, following semver from `v1.0.0` onward (see `RELEASING.md` § Versioning policy), separate from siege-web. The runtime is coupled to siege-web by design (shared Discord token, sidecar HTTP contract, shared guild) — the separate-repo / separate-versioning is for code-organization clarity, not real separability.
 
 ## License
 
