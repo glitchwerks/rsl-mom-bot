@@ -62,13 +62,8 @@ param maxReplicas int = 1
 @description('Environment prefix used in the MOM_BOT_ENV env var and to derive KV secret names (e.g. \'prod\' → \'prod-database-url\'). Default \'prod\' preserves current single-env behavior.')
 param momBotEnv string = 'prod'
 
-@secure()
-@description('Log Analytics workspace customer ID for CAE appLogsConfiguration.')
-param logAnalyticsCustomerId string
-
-@secure()
-@description('Log Analytics workspace shared key for CAE appLogsConfiguration.')
-param logAnalyticsSharedKey string
+@description('ARM resource ID of the Log Analytics workspace used by the CAE diagnostic settings.')
+param logAnalyticsWorkspaceId string
 
 @secure()
 @description('Application Insights connection string, exposed to mom-bot container as APPLICATIONINSIGHTS_CONNECTION_STRING.')
@@ -85,12 +80,24 @@ resource cae 'Microsoft.App/managedEnvironments@2024-03-01' = {
     // Consumption-only: no workloadProfiles block → defaults to Consumption.
     zoneRedundant: false
     appLogsConfiguration: {
-      destination: 'log-analytics'
-      logAnalyticsConfiguration: {
-        customerId: logAnalyticsCustomerId
-        sharedKey: logAnalyticsSharedKey
-      }
+      destination: 'azure-monitor'
     }
+  }
+}
+
+// Routes CAE console + system logs to Log Analytics via the platform resource-log
+// pipeline (diagnostic settings) instead of the legacy shared-key custom-log
+// ingest. Destination tables lose the _CL suffix: ContainerAppConsoleLogs /
+// ContainerAppSystemLogs. See issue #338.
+resource caeDiagnostics 'Microsoft.Insights/diagnosticSettings@2021-05-01-preview' = {
+  name: 'cae-logs-to-law'
+  scope: cae
+  properties: {
+    workspaceId: logAnalyticsWorkspaceId
+    logs: [
+      { category: 'ContainerAppConsoleLogs', enabled: true }
+      { category: 'ContainerAppSystemLogs', enabled: true }
+    ]
   }
 }
 
