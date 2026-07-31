@@ -10,6 +10,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 <!-- Add a "### 📣 Highlights" sub-section here before cutting the next release.
      See RELEASING.md § "Discord Highlights convention" for what to write there. -->
 
+## [1.5.1] - 2026-07-31
+
+### Fixed
+
+- **`deploy.yml` `REQUIRED_SECRETS` synced with `load_secret()` call sites** — added the previously-missing `prod-new-members-channel-id` and `prod-discord-bot-api-key` entries to the preflight secrets array, which had drifted from the actual call sites in `src/`; a new AST-based drift regression test walks `src/` for every `load_secret()` call site and asserts exact-set equality against the workflow's array (#320, #341).
+- **Prod revision-readiness gate added to `deploy.yml`, then given real timeout headroom** — `az containerapp update` previously returned as soon as the update was accepted, not once the new revision was actually serving, leaving `deploy.yml` reporting success while the old revision could still be answering traffic for 60–90s; a polling "wait for prod revision readiness" step was added first (#332, #342), then widened from a 5-minute to a 10-minute timeout after a real prod deploy took 340s+ for the app-level `latestReadyRevisionName` field to catch up even though the revision itself was already healthy (#344, #345).
+
+### Infrastructure
+
+- **Migrated off Data Collector API shared-key log ingestion** — the Container Apps environment now routes console/system logs directly to Azure Monitor via a `diagnosticSettings` resource instead of the legacy shared-key custom-log ingest path, ahead of Microsoft's 2026-09-14 retirement of that API and in line with the org's managed-identity-over-key-auth standard; `deploy.yml`'s migration-log KQL query now unions the old and new table names so migration-job output isn't lost during the cutover (#338, #339).
+- **`glitchwerks/github-actions` reusable workflow bumped 2.6.1 → 2.6.2** — picks up a fix for a relative-path resolution bug in `claude-command-router` that broke the action for external consumers (it invoked `check-auth` via `./check-auth`, which resolved into the *caller's* checked-out tree instead of the library's) (#336).
+- **CI action/dependency bumps** — `actions/checkout` 4.2.2 → 7.0.1 (#337), `docker/login-action` 4.2.0 → 4.5.1 (#335), `docker/setup-buildx-action` 4.1.0 → 4.2.0 (#334), `docker/build-push-action` 6.9.0 → 7.3.0 (#333).
+
+### Documentation
+
+- **Deploy-recency guardrail documented in the AAD runbook** — new subsection (written in planned tense, ahead of the guardrail workflow itself landing) covering the `DISCORD_INFRA_ALERT_WEBHOOK_URL` webhook secret and the manual action needed for `infra/scripts/**` changes the automated guardrail can't see; also fixed a missing "Step 9.5" checklist item in the runbook's summary checklist, and added a README "Infrastructure runbook cross-reference" section pointing at the runbook (#319, #343).
+
 ## [1.5.0] - 2026-07-25
 
 ### 📣 Highlights
@@ -213,7 +230,8 @@ v1.1.0 makes mom-bot observable and hardens its infrastructure for the long run:
 
 **Pre-1.0 history**: Initial pre-1.0 development — see `git log` and the merged PR history for full provenance.
 
-[Unreleased]: https://github.com/glitchwerks/rsl-mom-bot/compare/v1.5.0...HEAD
+[Unreleased]: https://github.com/glitchwerks/rsl-mom-bot/compare/v1.5.1...HEAD
+[1.5.1]: https://github.com/glitchwerks/rsl-mom-bot/compare/v1.5.0...v1.5.1
 [1.5.0]: https://github.com/glitchwerks/rsl-mom-bot/compare/v1.4.1...v1.5.0
 [1.4.1]: https://github.com/glitchwerks/rsl-mom-bot/compare/v1.4.0...v1.4.1
 [1.4.0]: https://github.com/glitchwerks/rsl-mom-bot/compare/v1.3.0...v1.4.0
