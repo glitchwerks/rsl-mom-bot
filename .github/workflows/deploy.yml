@@ -222,3 +222,43 @@ jobs:
             --name ca-mom-bot \
             --resource-group "$AZURE_RESOURCE_GROUP" \
             --image ghcr.io/glitchwerks/mom-bot:${{ steps.resolve_sha.outputs.sha }}
+
+      - name: Wait for prod revision readiness
+        run: |
+          RG="$AZURE_RESOURCE_GROUP"
+          APP=ca-mom-bot
+
+          TIMEOUT=300
+          ELAPSED=0
+          SLEEP_INTERVAL=10
+          LATEST_REVISION=""
+          LATEST_READY_REVISION=""
+
+          while [ $ELAPSED -lt $TIMEOUT ]; do
+            set +e
+            REVISION_NAMES=$(az containerapp show \
+              --name "$APP" \
+              --resource-group "$RG" \
+              --query '[properties.latestRevisionName, properties.latestReadyRevisionName]' \
+              -o tsv)
+            STATUS=$?
+            set -e
+
+            if [ $STATUS -eq 0 ]; then
+              read -r LATEST_REVISION LATEST_READY_REVISION <<< "$REVISION_NAMES"
+              if [ -n "$LATEST_REVISION" ] && [ "$LATEST_READY_REVISION" = "$LATEST_REVISION" ]; then
+                echo "[revision-ready] Revision $LATEST_REVISION is ready."
+                exit 0
+              fi
+
+              echo "[revision-ready] latest=$LATEST_REVISION ready=$LATEST_READY_REVISION; retrying in ${SLEEP_INTERVAL}s (elapsed ${ELAPSED}s)..."
+            else
+              echo "::warning::Could not query Container App revision readiness (exit $STATUS); retrying in ${SLEEP_INTERVAL}s (elapsed ${ELAPSED}s)."
+            fi
+
+            sleep $SLEEP_INTERVAL
+            ELAPSED=$((ELAPSED + SLEEP_INTERVAL))
+          done
+
+          echo "::error::Container App revision did not become ready within ${TIMEOUT}s (latest=$LATEST_REVISION, ready=$LATEST_READY_REVISION)."
+          exit 1
