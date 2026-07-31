@@ -228,7 +228,7 @@ jobs:
           RG="$AZURE_RESOURCE_GROUP"
           APP=ca-mom-bot
 
-          TIMEOUT=300
+          TIMEOUT=600
           ELAPSED=0
           SLEEP_INTERVAL=10
           LATEST_REVISION=""
