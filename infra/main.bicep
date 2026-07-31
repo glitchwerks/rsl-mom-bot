@@ -157,8 +157,7 @@ module containerApp 'modules/containerapp.bicep' = {
     keyVaultUri: kv.outputs.uri
     maxReplicas: 1
     momBotEnv: momBotEnv
-    logAnalyticsCustomerId: observability.outputs.logAnalyticsCustomerId
-    logAnalyticsSharedKey: observability.outputs.logAnalyticsSharedKey
+    logAnalyticsWorkspaceId: observability.outputs.logAnalyticsId
     appInsightsConnectionString: observability.outputs.appInsightsConnectionString
   }
 }

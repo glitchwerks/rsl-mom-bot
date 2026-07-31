@@ -166,10 +166,10 @@ jobs:
             set +e
             LOGS=$(az monitor log-analytics query \
               --workspace "$WORKSPACE_ID" \
-              --analytics-query "ContainerAppConsoleLogs_CL
-                | where ContainerGroupName_s startswith '${EXEC_NAME}'
-                | order by TimeGenerated asc
-                | project TimeGenerated, Log_s" \
+              --analytics-query "union isfuzzy=true
+                (ContainerAppConsoleLogs    | where ContainerGroupName    startswith '${EXEC_NAME}' | project TimeGenerated, Msg=Log),
+                (ContainerAppConsoleLogs_CL | where ContainerGroupName_s  startswith '${EXEC_NAME}' | project TimeGenerated, Msg=Log_s)
+              | order by TimeGenerated asc" \
               -o tsv 2>&1)
             STATUS=$?
             set -e

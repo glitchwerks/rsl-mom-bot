@@ -56,16 +56,9 @@ resource appi 'Microsoft.Insights/components@2020-02-02' = {
 // Outputs
 // ---------------------------------------------------------------------------
 
-@description('Log Analytics workspace customer ID (used by CAE appLogsConfiguration).')
-output logAnalyticsCustomerId string = law.properties.customerId
-
-@secure()
-@description('Log Analytics workspace primary shared key (used by CAE appLogsConfiguration).')
-output logAnalyticsSharedKey string = law.listKeys().primarySharedKey
-
 @secure()
 @description('Application Insights connection string — expose to mom-bot container as APPLICATIONINSIGHTS_CONNECTION_STRING.')
 output appInsightsConnectionString string = appi.properties.ConnectionString
 
-@description('Resource ID of the Log Analytics workspace (for downstream references).')
+@description('Resource ID of the Log Analytics workspace, passed to diagnosticSettings.properties.workspaceId in containerapp.bicep.')
 output logAnalyticsId string = law.id
