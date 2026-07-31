@@ -183,6 +183,18 @@ class TestRevisionReadyGatePolls:
             "the gate must retry with a poll cadence instead of checking "
             "once."
         )
+        assert re.search(r"\b(?:while|until|for)\b", gate_step), (
+            "Gate step has no loop — a sleep call alone does not retry the "
+            "revision-readiness query."
+        )
+        assert re.search(
+            r"\b(?:timeout|deadline|max[_ -]?(?:attempts|retries))\b",
+            gate_step,
+            re.IGNORECASE,
+        ), (
+            "Gate step has no visible polling bound — retries must stop and "
+            "fail after a finite limit."
+        )
         assert re.search(r"exit\s+1\b", gate_step), (
             "Gate step has no non-zero exit path — an unbounded poll that "
             "never fails would hang the deploy job forever instead of "
