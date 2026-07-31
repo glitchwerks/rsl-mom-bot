@@ -37,7 +37,7 @@ jobs:
     steps:
       # Check out the exact SHA that CI greened, not whatever HEAD is at the
       # moment this workflow_run event fires (which could be a later commit).
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           ref: ${{ github.event.workflow_run.head_sha }}
 
