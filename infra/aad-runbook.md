@@ -859,7 +859,7 @@ After the workflow completes, continue to Step 5.5 (Entra admin creation on Post
 ### Why Step 9.5 matters — and the guardrail that enforces it
 
 Skipping Step 9.5 after an `infra/**` merge is exactly what caused incident
-[#314](https://github.com/glitchwerks/mom-bot/issues/314): a Key Vault secret
+[#314](https://github.com/glitchwerks/rsl-mom-bot/issues/314): a Key Vault secret
 was declared in Bicep but the apply that would have created it in Azure was
 never dispatched, and nothing failed or warned for over four days.
 
