@@ -51,8 +51,10 @@ jobs:
         run: |
           VAULT="kv-mombot-eastus2"
           REQUIRED_SECRETS=(
+            "prod-discord-bot-api-key"
             "prod-discord-token"
             "prod-guild-id"
+            "prod-new-members-channel-id"
             "prod-reminder-channel-name"
             "prod-reminder-mention-role-name"
             "prod-siege-web-url"
