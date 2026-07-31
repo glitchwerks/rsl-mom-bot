@@ -200,6 +200,10 @@ All workflows live in `.github/workflows/`:
 
 `prod-infra` is a GitHub Deployments environment used only as a queryable ledger of what `infra-deploy.yml` last applied — it does not gate anything today. See `infra/aad-runbook.md` for first-time provisioning and `RELEASING.md` for the tag → release → deploy sequence.
 
+## Infrastructure runbook cross-reference
+
+`infra/aad-runbook.md` is the authoritative operational doc for Azure infrastructure work — AAD app registration, OIDC federated credentials, the Bicep apply steps (Step 5 pre-merge, Step 9.5 post-merge), and secret seeding. It also documents the deploy-recency guardrail planned in [#318](https://github.com/glitchwerks/rsl-mom-bot/issues/318) — including the webhook secret it needs and the `infra/scripts/**` coverage gap. This table only lists workflow entry points; consult the runbook for the operational procedure behind them.
+
 ## Versioning
 
 Mom-bot is its own product on its own version track, following semver from `v1.0.0` onward (see `RELEASING.md` § Versioning policy), separate from siege-web. The runtime is coupled to siege-web by design (shared Discord token, sidecar HTTP contract, shared guild) — the separate-repo / separate-versioning is for code-organization clarity, not real separability.
