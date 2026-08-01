@@ -14,6 +14,15 @@ set -euo pipefail
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 ENV_FILE="$SCRIPT_DIR/../.env.dev"
 
+if [ "${OS:-}" = "Windows_NT" ]; then
+  PYTHON="$SCRIPT_DIR/../.venv/Scripts/python.exe"
+else
+  case "$(uname -s 2>/dev/null)" in
+    CYGWIN*|MINGW*|MSYS*) PYTHON="$SCRIPT_DIR/../.venv/Scripts/python.exe" ;;
+    *) PYTHON="$SCRIPT_DIR/../.venv/bin/python" ;;
+  esac
+fi
+
 if [ ! -f "$ENV_FILE" ]; then
   printf 'Error: required development environment file not found: %s\n' "$ENV_FILE" >&2
   exit 1
@@ -38,4 +47,4 @@ fi
 az account set --subscription "$AZURE_SUBSCRIPTION_ID"
 
 export MOM_BOT_ENV=dev
-exec python -m mom_bot
+exec "$PYTHON" -m mom_bot
