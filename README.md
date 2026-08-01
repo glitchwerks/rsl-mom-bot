@@ -100,6 +100,33 @@ $env:MOM_BOT_ENV = "dev"; .\.venv\Scripts\python.exe -m mom_bot
 additional environment variables required. See `docs/secrets-inventory.md` for
 the full list of secrets and their purposes.
 
+**Once set up, launch with one command:**
+
+After the one-time `az login` and Key Vault role grant above, create a
+`.env.dev` file in the repo root with the same tenant and subscription GUIDs
+used in step 1 and step 2:
+
+```
+AZURE_TENANT_ID=48bca6c3-6d4f-4884-bc1a-648ae2362a32
+AZURE_SUBSCRIPTION_ID=213aa1f8-32d1-4ffe-8f4d-6e60f1cd9dc0
+```
+
+`.env.dev` is git-ignored — these GUIDs aren't secrets, but per repo
+convention it still isn't a tracked file. Then launch mom-bot with:
+
+```bash
+./scripts/dev-launch.sh
+```
+
+This skips `az login` if you're already on the right tenant, always runs
+`az account set --subscription` to select the configured subscription, sets
+`MOM_BOT_ENV=dev`, and execs `python -m mom_bot` — activate your `.venv`
+first (or run it from a shell where `.venv` is on `PATH`), since the script
+uses whatever `python` resolves to rather than the venv interpreter
+explicitly. Use the manual steps below instead if you'd rather not use the
+wrapper, or for first-time setup (the wrapper still requires the Key Vault
+role grant to be done first).
+
 ### Running the bot locally
 
 After `Local Azure Access` is set up and `dev-discord-token` + `dev-guild-id`
