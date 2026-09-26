@@ -15,6 +15,7 @@ language describe the state of the project when they were written.
 - [`operations/day-role-sync-runbook.md`](operations/day-role-sync-runbook.md) — day-role synchronization operations and troubleshooting.
 - [`operations/day-role-sync-smoke.md`](operations/day-role-sync-smoke.md) — live smoke validation for day-role synchronization.
 - [`operations/discord-roles-preflight.md`](operations/discord-roles-preflight.md) — Discord role hierarchy and permission setup.
+- [`operations/discord-application-profile.md`](operations/discord-application-profile.md) — source of truth and update procedure for the bot's user-facing About Me text.
 
 ## Historical design records
 

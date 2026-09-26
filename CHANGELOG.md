@@ -16,6 +16,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Discord profile maturity wording corrected** — the production About Me copy and its external Developer Portal source of truth are now documented so outdated WIP wording does not return (#362).
+
 - **Dependabot pull requests now run the full CI suite** — the workflow explicitly permits `dependabot[bot]` while retaining the existing author-association restriction for other external contributors (#357).
 
 - **Infrastructure drift now triggers an operator alert** — a read-only daily guardrail compares deployable `infra/**` files on `main` with the last successful `prod-infra` deployment and posts to the dedicated Discord webhook when they diverge (#318).
