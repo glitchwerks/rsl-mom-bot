@@ -64,7 +64,9 @@ def test_guardrail_is_read_only_and_alerts_to_dedicated_webhook() -> None:
     text = _workflow_text()
 
     assert "deployments: read" in text
-    assert "DISCORD_INFRA_ALERT_WEBHOOK_URL" in text
+    assert "SLACK_INFRA_ALERT_WEBHOOK_URL" in text
+    assert "DISCORD_INFRA_ALERT_WEBHOOK_URL" not in text
+    assert "'{text: $text}'" in text
     assert "az login" not in text
     assert "az deployment" not in text
     assert "infra-deploy.yml from main" in text

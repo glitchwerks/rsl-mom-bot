@@ -218,7 +218,7 @@ All workflows live in `.github/workflows/`:
 | `ci.yml` | PR, push to `main` | Lint (ruff + `uv lock --check`), format check (black), type check (mypy), pytest, Docker build smoke test, shellcheck, pip-audit (non-blocking) |
 | `build-image.yml` | `workflow_run` after `ci.yml` succeeds on `main` | Builds and pushes the `:<sha>` GHCR image — structurally guaranteed to run only after CI is green for that exact SHA |
 | `deploy.yml` | Manual (`workflow_dispatch`) | Deploys a commit's image to the prod Container App: verifies the GHCR image exists, runs Alembic migrations via a Container Apps Job, then updates `ca-mom-bot` |
-| `infra-recency-check.yml` | Daily, relevant `infra/**` pushes to `main`, manual | Compares deployable infra files with the last successful `prod-infra` deployment and alerts the operator Discord channel when they diverge |
+| `infra-recency-check.yml` | Daily, relevant `infra/**` pushes to `main`, manual | Compares deployable infra files with the last successful `prod-infra` deployment and alerts the development Slack channel when they diverge |
 | `infra-deploy.yml` | Manual (`workflow_dispatch`) | Applies Bicep templates to the prod subscription (mutates live Azure infra); records the deployed commit as a GitHub Deployment on the `prod-infra` environment (#321) |
 | `infra-what-if.yml` | PR touching `infra/**` | Posts an `az deployment sub create --what-if` diff as a PR comment; informational only, not a merge gate |
 | `release.yml` | Push of a `v*` tag | Publishes a GitHub Release (notes from `CHANGELOG.md`) and an immutable `:vX.Y.Z` GHCR image; posts the Discord release announcement |
@@ -230,7 +230,7 @@ All workflows live in `.github/workflows/`:
 
 ## Infrastructure runbook cross-reference
 
-`infra/aad-runbook.md` is the authoritative operational doc for Azure infrastructure work — AAD app registration, OIDC federated credentials, the Bicep apply steps (Step 5 pre-merge, Step 9.5 post-merge), and secret seeding. It also documents the deploy-recency guardrail planned in [#318](https://github.com/glitchwerks/rsl-mom-bot/issues/318) — including the webhook secret it needs and the `infra/scripts/**` coverage gap. This table only lists workflow entry points; consult the runbook for the operational procedure behind them.
+`infra/aad-runbook.md` is the authoritative operational doc for Azure infrastructure work — AAD app registration, OIDC federated credentials, the Bicep apply steps (Step 5 pre-merge, Step 9.5 post-merge), and secret seeding. It also documents the deploy-recency guardrail from [#318](https://github.com/glitchwerks/rsl-mom-bot/issues/318) — including the Slack webhook secret it needs and the `infra/scripts/**` coverage gap. This table only lists workflow entry points; consult the runbook for the operational procedure behind them.
 
 ## Versioning
 

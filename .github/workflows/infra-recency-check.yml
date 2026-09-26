@@ -128,16 +128,16 @@ jobs:
             fi
           } >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Alert Discord on infra drift
+      - name: Alert Slack on infra drift
         if: steps.drift.outputs.detected == 'true'
         env:
-          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_INFRA_ALERT_WEBHOOK_URL }}
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_INFRA_ALERT_WEBHOOK_URL }}
           BASELINE_SHA: ${{ steps.baseline.outputs.sha }}
           CURRENT_SHA: ${{ steps.drift.outputs.current_sha }}
           DRIFT_REASON: ${{ steps.drift.outputs.reason }}
         run: |
-          if [ -z "$DISCORD_WEBHOOK_URL" ]; then
-            echo "::error::DISCORD_INFRA_ALERT_WEBHOOK_URL is not configured; infra drift could not be reported."
+          if [ -z "$SLACK_WEBHOOK_URL" ]; then
+            echo "::error::SLACK_INFRA_ALERT_WEBHOOK_URL is not configured; infra drift could not be reported."
             exit 1
           fi
 
@@ -149,26 +149,24 @@ jobs:
 
           CHANGED_FILES=$(sed -n '1,50{s/^/• /;p}' infra-drift-files.txt)
           RUN_URL="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
-          DESCRIPTION=$(printf '%s\n\nLast deployed: `%s`\nCurrent main: `%s`\n\n%s' \
-            "$SUMMARY" "$BASELINE_SHA" "$CURRENT_SHA" "$CHANGED_FILES")
+          MESSAGE=$(printf ':warning: *mom-bot infrastructure drift detected*\n\n%s\n\n*Last deployed:* `%s`\n*Current main:* `%s`\n\n*Changed deployable files:*\n```%s```\n\n<%s|View workflow run>' \
+            "$SUMMARY" "$BASELINE_SHA" "$CURRENT_SHA" "$CHANGED_FILES" "$RUN_URL")
 
           PAYLOAD=$(jq -n \
-            --arg title "⚠️ mom-bot infrastructure drift detected" \
-            --arg url "$RUN_URL" \
-            --arg description "$DESCRIPTION" \
-            '{embeds: [{title: $title, url: $url, description: $description, color: 15158332}]}'
+            --arg text "$MESSAGE" \
+            '{text: $text}'
           )
 
           RESPONSE_BODY=$(mktemp)
           HTTP_STATUS=$(curl -sS -o "$RESPONSE_BODY" -w '%{http_code}' \
             -H 'Content-Type: application/json' \
             -d "$PAYLOAD" \
-            "$DISCORD_WEBHOOK_URL")
+            "$SLACK_WEBHOOK_URL")
 
           if [ "$HTTP_STATUS" -lt 200 ] || [ "$HTTP_STATUS" -ge 300 ]; then
-            echo "::error::Discord webhook returned HTTP $HTTP_STATUS; infra drift alert was not delivered."
+            echo "::error::Slack webhook returned HTTP $HTTP_STATUS; infra drift alert was not delivered."
             cat "$RESPONSE_BODY"
             exit 1
           fi
 
-          echo "Infra drift alert delivered to Discord (HTTP $HTTP_STATUS)."
+          echo "Infra drift alert delivered to Slack (HTTP $HTTP_STATUS)."

@@ -14,7 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Dependabot pull requests now run the full CI suite** — the workflow explicitly permits `dependabot[bot]` while retaining the existing author-association restriction for other external contributors (#357).
 
-- **Infrastructure drift now triggers an operator alert** — a read-only daily guardrail compares deployable `infra/**` files on `main` with the last successful `prod-infra` deployment and posts to the dedicated Discord webhook when they diverge (#318).
+- **Infrastructure drift now triggers an operator alert** — a read-only daily guardrail compares deployable `infra/**` files on `main` with the last successful `prod-infra` deployment and posts to the development Slack channel when they diverge (#318, #359).
 
 - **Production deploy readiness now polls the target revision directly** — the deploy workflow captures the revision created by `az containerapp update` and waits for its revision-level `healthState=Healthy` and `provisioningState=Provisioned`, avoiding false failures caused by the parent Container App's unreliable `latestReadyRevisionName` field (#347).
 
@@ -33,7 +33,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Documentation
 
-- **Deploy-recency guardrail documented in the AAD runbook** — new subsection (written in planned tense, ahead of the guardrail workflow itself landing) covering the `DISCORD_INFRA_ALERT_WEBHOOK_URL` webhook secret and the manual action needed for `infra/scripts/**` changes the automated guardrail can't see; also fixed a missing "Step 9.5" checklist item in the runbook's summary checklist, and added a README "Infrastructure runbook cross-reference" section pointing at the runbook (#319, #343).
+- **Deploy-recency guardrail documented in the AAD runbook** — new subsection (written in planned tense, ahead of the guardrail workflow itself landing) covering its dedicated alert-webhook secret and the manual action needed for `infra/scripts/**` changes the automated guardrail can't see; also fixed a missing "Step 9.5" checklist item in the runbook's summary checklist, and added a README "Infrastructure runbook cross-reference" section pointing at the runbook (#319, #343).
 
 ## [1.5.0] - 2026-07-25
 
