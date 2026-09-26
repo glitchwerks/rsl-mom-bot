@@ -12,6 +12,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Dependabot pull requests now run the full CI suite** — the workflow explicitly permits `dependabot[bot]` while retaining the existing author-association restriction for other external contributors (#357).
+
 - **Infrastructure drift now triggers an operator alert** — a read-only daily guardrail compares deployable `infra/**` files on `main` with the last successful `prod-infra` deployment and posts to the dedicated Discord webhook when they diverge (#318).
 
 - **Production deploy readiness now polls the target revision directly** — the deploy workflow captures the revision created by `az containerapp update` and waits for its revision-level `healthState=Healthy` and `provisioningState=Provisioned`, avoiding false failures caused by the parent Container App's unreliable `latestReadyRevisionName` field (#347).
