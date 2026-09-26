@@ -13,6 +13,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Documentation
 
 - **Production documentation refreshed** — the README now describes the deployed service and current architecture, active runbooks no longer present completed epics or the retired SQLite production setup as future work, and historical plans are clearly separated from current operational guidance (#361).
+- **MIT license added** — the repository now includes the full MIT license text and declares the license in its package metadata and README.
 
 ### Fixed
 
