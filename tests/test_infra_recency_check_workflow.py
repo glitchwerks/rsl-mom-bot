@@ -5,7 +5,6 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-
 _ROOT = Path(__file__).resolve().parents[1]
 _WORKFLOW = _ROOT / ".github" / "workflows" / "infra-recency-check.yml"
 
@@ -46,7 +45,7 @@ def test_diff_pathspec_matches_push_exclusions() -> None:
 def test_latest_prod_infra_deployment_is_the_baseline() -> None:
     text = _workflow_text()
 
-    assert 'environment=prod-infra' in text
+    assert "environment=prod-infra" in text
     assert "task='deploy:infra'" in text
     assert "--jq '.[0].sha'" in text
     assert "git cat-file -e" in text
