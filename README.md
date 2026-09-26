@@ -1,24 +1,54 @@
 # mom-bot
 
-Discord bot consolidating two existing bots — `siege-web`'s notifications sidecar and the reminder system from `I:\games\raid\siege\clan\` — into a single bot with interactive slash commands.
+Production Discord service for a Raid: Shadow Legends guild. It provides
+scheduled reminders, member workflows, siege-web integrations, and operational
+automation from Azure Container Apps.
 
-## What it does
+## Production capabilities
 
-- **Reminders** — scheduled channel posts for Hydra and Chimera clashes, with a Hydra Tank Week variant that swaps in a heads-up and an end-of-clash message.
-- **Per-member DM notifications** — officers schedule recurring reminders to individual members via `/member-notify-add`, `-list`, `-get`, `-update`, `-remove` (weekly / biweekly / monthly cadence).
-- **Day-role sync** — receives siege-web webhooks and applies/removes Discord day roles.
-- **Post-conditions** — `/post-conditions`, `/post-conditions-get`, `/post-conditions-set` proxy siege-web's preferences API so members can view and set post-condition priorities from Discord.
-- **New-member onboarding** — new joiners get an automatic welcome message asking for a profile screenshot; officers can subscribe to join alerts via `/notify-new-members`; members who post nothing within 24h receive a heads-up DM and are removed from the server.
-- **`/ping`** — health check (version + uptime).
-- **Sidecar HTTP API** — FastAPI service on port 8001 backing the siege-web integrations above.
+| Area | Current behavior |
+| --- | --- |
+| Scheduled reminders | Posts Hydra, Chimera, Siege, and Hydra Tank Week notices from persisted schedules. |
+| Member notifications | Officers manage recurring weekly, biweekly, or monthly member DMs with `/member-notify-*` commands. |
+| Day-role synchronization | Receives authenticated siege-web events and applies or removes Discord siege-day roles. |
+| Post-condition preferences | Members view and update siege-web post-condition priorities through `/post-conditions*`. |
+| New-member onboarding | Welcomes new members, alerts subscribed officers, tracks first-message activity, and follows up on silent joins. |
+| Health and integrations | Exposes `/ping`, authenticated health endpoints, and the FastAPI sidecar used by siege-web. |
 
-See `CHANGELOG.md` for the full, dated history of every feature and fix, and the framework plan below for the original design rationale.
+The bot is deployed independently from infrastructure changes: application
+deployments use `deploy.yml`, while Azure Bicep changes use the separately
+gated `infra-deploy.yml` workflow. See [`CHANGELOG.md`](CHANGELOG.md) for the
+dated release history.
+
+## Current architecture
+
+- A `discord.py` client and FastAPI sidecar run together in Azure Container Apps.
+- Azure Database for PostgreSQL stores reminders, member notifications, onboarding activity, and role state.
+- Azure Key Vault supplies runtime secrets through managed identity.
+- Azure Monitor and Application Insights receive application and platform telemetry.
+- Bicep under [`infra/`](infra/) defines the production Azure resources.
+- GitHub Actions builds immutable images, runs migrations, deploys the app, applies infrastructure manually, and checks for undeployed infrastructure changes.
+
+## Supported commands
+
+| Command | Purpose |
+| --- | --- |
+| `/ping` | Show the running version and uptime. |
+| `/member-notify-add`, `-list`, `-get`, `-update`, `-remove` | Manage recurring member DM notifications. |
+| `/post-conditions`, `-get`, `-set` | View and update siege-web post-condition preferences. |
+| `/notify-new-members` | Turn officer DM alerts for new guild members on or off. |
 
 ## Documentation
 
-- **Framework plan:** [`docs/superpowers/plans/2026-05-08-mom-bot-framework.md`](docs/superpowers/plans/2026-05-08-mom-bot-framework.md) — locked design decisions, phasing, risks, and verification for the original v1.0 build-out (epics 0-4 + the PostgreSQL migration)
-- **Release history:** [`CHANGELOG.md`](CHANGELOG.md) (Keep a Changelog format) and the [GitHub Releases page](https://github.com/glitchwerks/rsl-mom-bot/releases)
-- **Release process:** [`RELEASING.md`](RELEASING.md) — tag/version/deploy procedure
+- **Documentation index:** [`docs/README.md`](docs/README.md) — separates current operational guidance from historical design records.
+- **Release process:** [`RELEASING.md`](RELEASING.md) — version, tag, release, notification, and deployment procedure.
+- **Infrastructure operations:** [`infra/aad-runbook.md`](infra/aad-runbook.md) — Azure identity, provisioning, deployment, and recovery procedures.
+- **Secrets inventory:** [`docs/secrets-inventory.md`](docs/secrets-inventory.md) — secret ownership, consumers, and rotation notes.
+- **Release history:** [`CHANGELOG.md`](CHANGELOG.md) and [GitHub Releases](https://github.com/glitchwerks/rsl-mom-bot/releases).
+
+Historical framework plans remain available under `docs/superpowers/` for
+design rationale. They describe the original implementation sequence and are
+not current runbooks or a statement of product maturity.
 
 ## Prerequisites
 
@@ -202,7 +232,7 @@ mom-bot/
 ├── migrations/                         # Alembic migration scripts (env.py, script.py.mako, versions/)
 ├── tests/                              # Pytest suite (unit + integration): per-package subdirectories plus top-level test modules
 ├── alembic.ini                         # Alembic config (local SQLite default)
-├── docs/                               # Design docs, secrets inventory, framework plan
+├── docs/                               # Operational docs and historical design records
 ├── infra/                              # Bicep templates + AAD runbook
 ├── pyproject.toml                      # PEP 621 metadata, tool configs
 ├── Dockerfile                          # Container build (python:3.12-slim, non-root)
@@ -230,7 +260,7 @@ All workflows live in `.github/workflows/`:
 
 ## Infrastructure runbook cross-reference
 
-`infra/aad-runbook.md` is the authoritative operational doc for Azure infrastructure work — AAD app registration, OIDC federated credentials, the Bicep apply steps (Step 5 pre-merge, Step 9.5 post-merge), and secret seeding. It also documents the deploy-recency guardrail planned in [#318](https://github.com/glitchwerks/rsl-mom-bot/issues/318) — including the webhook secret it needs and the `infra/scripts/**` coverage gap. This table only lists workflow entry points; consult the runbook for the operational procedure behind them.
+`infra/aad-runbook.md` is the authoritative operational doc for Azure infrastructure work — AAD app registration, OIDC federated credentials, the Bicep apply steps (Step 5 pre-merge, Step 9.5 post-merge), and secret seeding. It also documents the live deploy-recency guardrail from [#318](https://github.com/glitchwerks/rsl-mom-bot/issues/318), including the webhook secret it needs and the `infra/scripts/**` coverage gap. This table only lists workflow entry points; consult the runbook for the operational procedure behind them.
 
 ## Versioning
 
@@ -238,4 +268,4 @@ Mom-bot is its own product on its own version track, following semver from `v1.0
 
 ## License
 
-TBD — to be set before first public release.
+No open-source license has been declared for this repository.

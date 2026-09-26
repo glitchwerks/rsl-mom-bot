@@ -41,7 +41,7 @@ The emoji prefix (`📣`) is optional — `### Highlights` (without emoji) also 
 **Soft cap:** Descriptions longer than 1 500 characters are truncated and a "View full release notes" link is appended. Keep Highlights concise.
 
 **Required repo secret:**
-`DISCORD_RELEASE_WEBHOOK_URL` must be set as a repository secret. To create a Discord webhook: open the target channel → Edit Channel → Integrations → Webhooks → New Webhook → Copy Webhook URL. Add that URL at `https://github.com/glitchwerks/mom-bot/settings/secrets/actions`.
+`DISCORD_RELEASE_WEBHOOK_URL` must be set as a repository secret. To create a Discord webhook: open the target channel → Edit Channel → Integrations → Webhooks → New Webhook → Copy Webhook URL. Add that URL at `https://github.com/glitchwerks/rsl-mom-bot/settings/secrets/actions`.
 
 ## Pre-tag checklist
 
@@ -135,7 +135,7 @@ git push origin vX.Y.Z
 ### What to watch after pushing
 
 1. **`release.yml` workflow** — navigate to the Actions tab and confirm the `Release` run triggered on the new tag. It should publish the GitHub Release and push the `:vX.Y.Z` GHCR image. (The workflow is added in #215; its exact steps are defined in `.github/workflows/release.yml`.)
-2. **GitHub Release page** — verify it appears at `https://github.com/glitchwerks/mom-bot/releases/tag/vX.Y.Z` with the correct release notes.
+2. **GitHub Release page** — verify it appears at `https://github.com/glitchwerks/rsl-mom-bot/releases/tag/vX.Y.Z` with the correct release notes.
 3. **GHCR image** — confirm the versioned image is reachable: `docker manifest inspect ghcr.io/glitchwerks/mom-bot:vX.Y.Z`.
 
 ### Deploy is separate

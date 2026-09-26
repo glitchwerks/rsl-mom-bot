@@ -1,12 +1,12 @@
 # Discord day-role sync — pre-deploy ops checklist
 
-**Scope:** Epic 2.6. Covers the one-time steps a guild administrator must complete before enabling the
-day-role sync feature. This checklist applies to every environment (dev, prod) independently.
+**Scope:** One-time steps a guild administrator must complete before enabling the day-role sync
+feature. This checklist applies to every environment (dev, prod) independently.
 
 ## Purpose
 
-Epic 2.6 delivers automatic Discord role membership for siege day-assignments. When a member's
-`attack_day` field is set, changed, or cleared in siege-web, siege-web emits a
+Day-role synchronization provides automatic Discord role membership for siege day assignments.
+When a member's `attack_day` field is set, changed, or cleared in siege-web, siege-web emits a
 **day-role-sync webhook** to mom-bot. Mom-bot — the first conforming receiver of that contract —
 adds or removes the corresponding `Siege - Day N Attacker` Discord role on the member's account.
 
@@ -71,7 +71,7 @@ permissions reference.[^perms-ref]
 | `Send Messages`   | 11  | `0x00000800` | Reminder delivery (`channel.send` — `src/mom_bot/reminders/scheduler.py:256,260`); `/ping` response (`src/mom_bot/main.py:314`) |
 | `Embed Links`     | 14  | `0x00004000` | Ephemeral embed responses; reminder formatting (`docs/discord-permissions-reference.md § Layer 2`) |
 | `Attach Files`    | 15  | `0x00008000` | Sidecar `post-image` endpoint (`docs/discord-permissions-reference.md § Layer 2`)           |
-| `Manage Roles`    | 28  | `0x10000000` | Toggle `Siege - Day N Attacker` role membership when siege-web pushes assignment changes (Epic 2.6, A2 PR #68; role-toggle A4 #64) |
+| `Manage Roles`    | 28  | `0x10000000` | Toggle `Siege - Day N Attacker` role membership when siege-web pushes assignment changes |
 | `Create Events`   | 44  | `0x100000000000` | Autonomous tank-week creation; cancel of bot-created events (`docs/discord-permissions-reference.md § Layer 2`) |
 | **Total**         |     | **`0x10001000C800`**                 | Decimal: **`17592454531072`** |
 

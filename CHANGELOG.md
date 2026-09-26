@@ -10,6 +10,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 <!-- Add a "### 📣 Highlights" sub-section here before cutting the next release.
      See RELEASING.md § "Discord Highlights convention" for what to write there. -->
 
+### Documentation
+
+- **Production documentation refreshed** — the README now describes the deployed service and current architecture, active runbooks no longer present completed epics or the retired SQLite production setup as future work, and historical plans are clearly separated from current operational guidance (#361).
+
 ### Fixed
 
 - **Dependabot pull requests now run the full CI suite** — the workflow explicitly permits `dependabot[bot]` while retaining the existing author-association restriction for other external contributors (#357).
