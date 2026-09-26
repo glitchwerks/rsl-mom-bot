@@ -143,10 +143,10 @@ az keyvault secret delete --vault-name kv-mombot-eastus2 --name prod-reminder-ch
 New installs (no prior seeding) need only `reminder-channel-name` per env.
 Go straight to Step 8 of `infra/aad-runbook.md`.
 
-## Open question
+## Sidecar bearer-token rotation
 
-**#9 — Siege-web service token rotation cadence:** the `prod-*` secret for the
-siege-web Bearer service token (used by mom-bot's sidecar to call siege-web)
-will be added when the sidecar is implemented (Epic 2). Rotation cadence and
-mechanism (Key Vault reference + Container App restart vs. zero-downtime double
-rotation) is tracked as Open Question #9 in the framework plan.
+The sidecar is protected by `{env}-discord-bot-api-key`, which is loaded from
+Key Vault at application startup. Rotate the value in Key Vault and deploy or
+restart the affected application revision so the process loads the new value.
+Coordinate the same value in siege-web before enabling outbound calls with the
+new token; there is no double-token overlap mechanism.

@@ -1,11 +1,11 @@
 # Day-role sync — end-to-end smoke checklist
 
-**Audience:** Guild administrator / operator running the first live smoke after Epic 2.6 B2 is
-deployed. You will need access to the siege-web UI or API, the Discord guild, and the mom-bot
+**Audience:** Guild administrator or operator validating day-role synchronization in a deployed
+environment. You will need access to the siege-web UI or API, the Discord guild, and the mom-bot
 Container App logs.
 
-**Who runs this:** The operator manually, on the live Discord guild. Claude does not have guild
-access. Each step has a "you click / you run" action and an "expected result" to observe.
+**Who runs this:** An operator with access to the live Discord guild. Each step has a
+"you click / you run" action and an "expected result" to observe.
 
 **Prerequisites:** Complete `docs/operations/discord-roles-preflight.md` before starting. That
 checklist confirms the roles exist, the hierarchy is correct, and mom-bot has `MANAGE_ROLES`.
@@ -219,7 +219,7 @@ when absent or when the member does not match.
 **Do not set this in production.  Remove the env var and redeploy after the
 smoke test is complete.**
 
-Shipped in [#74](https://github.com/glitchwerks/mom-bot/issues/74).
+Shipped in [#74](https://github.com/glitchwerks/rsl-mom-bot/issues/74).
 
 **What a partial state looks like in practice (documented for operator awareness):**
 

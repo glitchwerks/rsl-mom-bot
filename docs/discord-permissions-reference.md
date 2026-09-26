@@ -1,6 +1,6 @@
 # Discord permissions, scopes & intents reference
 
-> **Purpose:** Single source of truth for what mom-bot needs from Discord at every configuration layer. Generated 2026-05-08 during Pre-Epic-0 conversation. See plan `docs/superpowers/plans/2026-05-08-mom-bot-framework.md` § Pre-Epic-0 and issue #1 for the audit checklist that consumes this reference.
+> **Purpose:** Current source of truth for what mom-bot needs from Discord at every configuration layer. The original implementation context is retained in `docs/superpowers/plans/2026-05-08-mom-bot-framework.md` and issue #1.
 >
 > **Status:** Conservative install profile (no `Manage Events`). Permissive variant documented at the bottom — flip if/when human-admin-created event editing becomes a real need.
 
@@ -22,17 +22,17 @@ Discord permissions are split across six distinct configuration surfaces. The sa
 | Scope | Required | Why |
 |---|---|---|
 | `bot` | yes | Install as a bot user |
-| `applications.commands` | **yes (new for mom-bot)** | Enables slash-command registration. There is no equivalent permission bit at layer 2 — `Use Application Commands` is a member permission, not a bot permission |
+| `applications.commands` | **yes** | Enables slash-command registration. There is no equivalent permission bit at layer 2 — `Use Application Commands` is a member permission, not a bot permission |
 
 ## Layer 2 — Bot install bitfield
 
 | Permission | Bit | Required | Why mom-bot needs it |
 |---|---|---|---|
-| `Send Messages` | `1 << 11` | yes (existing) | Channel posts (sidecar `post-message`, reminders) |
-| `Embed Links` | `1 << 14` | yes (existing) | Ephemeral embed responses; reminder formatting |
-| `Attach Files` | `1 << 15` | yes (existing) | Sidecar `post-image` |
-| **`Manage Roles`** | **`1 << 28`** | **yes (new)** | Day-role sync — toggle membership on `Attack Day N` roles when siege-web pushes assignment changes (Epic 2.6) |
-| **`Create Events`** | **`1 << 44`** | **yes (new)** | Autonomous tank-week creation; admin manual create; cancel of bot-created events |
+| `Send Messages` | `1 << 11` | yes | Channel posts (sidecar `post-message`, reminders) |
+| `Embed Links` | `1 << 14` | yes | Ephemeral embed responses; reminder formatting |
+| `Attach Files` | `1 << 15` | yes | Sidecar `post-image` |
+| **`Manage Roles`** | **`1 << 28`** | **yes** | Day-role sync — toggle membership on `Attack Day N` roles when siege-web pushes assignment changes |
+| **`Create Events`** | **`1 << 44`** | **yes** | Autonomous tank-week creation; admin manual create; cancel of bot-created events |
 | `Manage Events` | `1 << 33` | **no (deliberate)** | Only required to edit/cancel events created by **human admins** in the Discord UI. v1.0 doesn't need this. See § Permissive variant |
 | `Read Message History` | `1 << 16` | no | mom-bot doesn't read history; slash commands deliver structured payloads |
 | `Mention Everyone` | `1 << 17` | maybe | Only if reminders use `@here` / `@everyone`. The plan uses **role mentions**, which require the role itself to be mentionable in role settings, not this bit |
@@ -72,13 +72,13 @@ Admins can strip permissions at this layer at any time — the bot has no way to
 
 Discord enforces a hard rule on `Manage Roles`: a bot can only assign or remove roles that are **strictly lower in the role list than its own highest role**. This is layer-4 configuration — the install bitfield (layer 2) grants the *capability*, but layer 4's role-ordering decides which *specific* roles the bot can actually touch.
 
-**For the day-role sync feature (Epic 2.6) this means:**
+**For the day-role sync feature this means:**
 
 - mom-bot's role must be positioned **above** every `Attack Day N` role in the guild's Role list (Server Settings → Roles, drag-to-reorder)
 - Any human-managed role above mom-bot (e.g. `Clan Deputies`, `Admin`) is naturally outside mom-bot's reach — that's a feature, not a bug
 - If a day-role is accidentally moved above mom-bot's role, every role-toggle call for that day returns 403 silently — the only signal is in App Insights / failed-call telemetry
 
-**Audit checkpoint:** during Pre-Epic-0 (issue #1) and any time roles are reordered, verify the bot's role rank.
+**Audit checkpoint:** verify the bot's role rank during initial setup and any time roles are reordered.
 
 ## Layer 5 — Channel permission overwrites
 
@@ -145,7 +145,7 @@ The Installation tab is Discord's source of truth; this doc is the project's sou
 - **Saved scopes (Default Install Settings → Guild Install):** `bot`, `applications.commands` — pending visual reconfirmation in the portal
 - **Saved permissions integer (Default Install Settings → Guild Install):** `17592454531072` (conservative profile — see Layer 2) — pending visual reconfirmation in the portal
 - **Privileged gateway intents enabled in portal:** `GUILD_MEMBERS` ✓ confirmed `2026-05-08`
-- **Code-side intents flag (to be set in mom-bot's `Intents(...)` at Epic 0):** `GUILDS | GUILD_MEMBERS | GUILD_SCHEDULED_EVENTS`
+- **Code-side intents flags:** `GUILDS | GUILD_MEMBERS | GUILD_SCHEDULED_EVENTS | GUILD_MESSAGES` (see `build_intents()` in `src/mom_bot/main.py`)
 - **URL Generator equivalent (for reference only — NOT the canonical link):** `https://discord.com/oauth2/authorize?client_id=1362590154002530494&scope=bot+applications.commands&permissions=17592454531072`
 
 > The "URL Generator equivalent" is included as a sanity-check reference: if you ever need to verify what the Installation tab is *currently configured to install*, generate this URL via OAuth2 → URL Generator with the conservative permissions ticked, and compare. Drift between the two URLs is the signal that someone edited the Installation tab defaults outside this doc.
@@ -168,5 +168,5 @@ To flip: re-generate install URL with permissions integer `17601044465664` (cons
 - Discord docs § Application command permissions: https://docs.discord.com/developers/interactions/application-commands#permissions (fetched 2026-05-08)
 - discord.py § Permissions: https://discordpy.readthedocs.io/en/stable/api.html#permissions
 - discord.py § Intents: https://discordpy.readthedocs.io/en/stable/api.html#intents
-- Plan: `docs/superpowers/plans/2026-05-08-mom-bot-framework.md` § Pre-Epic-0
+- Historical design plan: `docs/superpowers/plans/2026-05-08-mom-bot-framework.md`
 - Tracking: issue #1 (audit), issue #3 (this doc)
