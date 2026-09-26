@@ -1,4 +1,4 @@
-"""Regression tests for the deploy.yml revision-ready gate (issues #332, #344).
+"""Regression tests for the deploy.yml revision-ready gate (issues #332, #344, #347).
 
 ``.github/workflows/deploy.yml``'s ``az containerapp update`` step returns as
 soon as the update API call is *accepted*, not once the new Container App
@@ -20,12 +20,11 @@ specific step name — it may be appended to the same run block as the update
 command, or placed in a following step. What matters is that *some* readiness
 check exists after the update call and actually gates job success.
 
-Issue #344 is a follow-up: the #342 gate's 300s timeout was itself too
-short — a real prod deploy took 340s+ to satisfy the readiness check even
-though the revision was already genuinely healthy.
-``TestRevisionReadyGateTimeoutHasRealHeadroom`` below adds the regression
-test for that: the earlier tests only check that *some* bound exists, not
-that it's long enough to be trustworthy.
+Issue #344 showed that the original 300s timeout was too short. Issue #347
+then showed that increasing the timeout to 600s was still insufficient:
+the parent Container App's ``latestReadyRevisionName`` remained empty while
+the target revision itself was already Healthy, Provisioned, and serving.
+The gate must therefore poll the specific revision resource directly.
 """
 
 from __future__ import annotations
@@ -46,10 +45,11 @@ _DEPLOY_YML = Path(__file__).parent.parent / ".github" / "workflows" / "deploy.y
 # update" call used to pin the migrations job image.
 _UPDATE_CMD_RE = re.compile(r"az\s+containerapp\s+update\b[\s\S]{0,400}?ca-mom-bot", re.MULTILINE)
 
-# Either signal from the issue's acceptance criteria ("and/or") counts as a
-# readiness check: latestReadyRevisionName == latestRevisionName, and/or the
-# new revision's healthState == Healthy.
-_READY_SIGNAL_RE = re.compile(r"latestReadyRevisionName|healthState")
+# Issue #347 requires the revision-level signal. The unreliable parent-app
+# latestReadyRevisionName field intentionally no longer qualifies.
+_READY_SIGNAL_RE = re.compile(r"healthState")
+
+_REVISION_SHOW_RE = re.compile(r"az\s+containerapp\s+revision\s+show\b")
 
 # Top-level GitHub Actions step headers, e.g. "      - name: Some step".
 _STEP_HEADER_RE = re.compile(r"^([ ]+)- name:[ \t]*(.+?)[ \t]*$", re.MULTILINE)
@@ -114,8 +114,8 @@ def _locate_revision_ready_gate(text: str) -> str:
     """Return the text of the step containing the post-update readiness gate.
 
     Searches for ``az containerapp update`` targeting ``ca-mom-bot``, then
-    looks for a readiness-check reference (``latestReadyRevisionName`` and/or
-    ``healthState``) anywhere after it — whether appended to the same run
+    looks for the revision-level ``healthState`` readiness signal anywhere
+    after it — whether appended to the same run
     block as the update command, or placed in a later step. This keeps the
     test satisfiable by more than one correct implementation shape.
 
@@ -143,7 +143,7 @@ def _locate_revision_ready_gate(text: str) -> str:
     if gate_match is None:
         pytest.fail(
             "deploy.yml has no readiness check (referencing "
-            "'latestReadyRevisionName' and/or 'healthState') anywhere after "
+            "revision-level 'healthState') anywhere after "
             "'az containerapp update ... ca-mom-bot'. Per issue #332, the "
             "workflow must poll until the new revision is actually "
             "ready/healthy before reporting the job successful — today it "
@@ -207,15 +207,55 @@ class TestRevisionReadyGateExists:
     def test_gate_exists_after_update_command(self) -> None:
         """A readiness check must follow the containerapp update call.
 
-        Covers issue #332's acceptance criteria: deploy.yml must poll for
-        ``latestReadyRevisionName == latestRevisionName`` and/or the new
-        revision's ``healthState == Healthy`` after ``az containerapp
-        update``, instead of reporting success as soon as the update API
-        call is merely accepted.
+        Covers issues #332 and #347: deploy.yml must poll the new revision's
+        ``healthState == Healthy`` after ``az containerapp update``, instead
+        of reporting success as soon as the update API call is accepted or
+        relying on the parent app's stale ``latestReadyRevisionName`` field.
         """
         text = _read_workflow_text()
         gate_step = _locate_revision_ready_gate(text)
         assert gate_step.strip(), "located gate step body is unexpectedly empty"
+
+
+class TestRevisionReadyGateUsesTargetRevision:
+    """Issue #347: poll the exact revision resource, not the parent app."""
+
+    def test_update_exports_the_created_revision_name(self) -> None:
+        """The update step must expose the exact revision created by Azure."""
+        text = _read_workflow_text()
+        update_match = _UPDATE_CMD_RE.search(text)
+        assert update_match is not None
+
+        update_step = next(
+            text[start:end]
+            for _name, start, end in _step_spans(text)
+            if start <= update_match.start() < end
+        )
+        assert "properties.latestRevisionName" in update_step
+        assert "$GITHUB_OUTPUT" in update_step
+
+    def test_gate_queries_specific_revision_health(self) -> None:
+        """The gate must call revision show with the update step's output."""
+        text = _read_workflow_text()
+        gate_step = _locate_revision_ready_gate(text)
+
+        assert _REVISION_SHOW_RE.search(gate_step), (
+            "Issue #347 requires 'az containerapp revision show'; querying "
+            "the parent Container App repeats the unreliable readiness check."
+        )
+        assert 'TARGET_REVISION="${{ steps.deploy_app.outputs.revision }}"' in gate_step
+        assert '--revision "$TARGET_REVISION"' in gate_step
+        assert "properties.healthState" in gate_step
+        assert "properties.provisioningState" in gate_step
+        assert "latestReadyRevisionName" not in gate_step
+        assert not re.search(r"az\s+containerapp\s+show\b", gate_step)
+
+    def test_gate_fails_immediately_on_terminal_revision_state(self) -> None:
+        """Known terminal states should fail without waiting ten minutes."""
+        gate_step = _locate_revision_ready_gate(_read_workflow_text())
+
+        assert '"Failed"' in gate_step
+        assert re.search(r'PROVISIONING_STATE"\s*=\s*"Failed"[\s\S]{0,500}?exit\s+1', gate_step)
 
 
 class TestRevisionReadyGatePolls:
@@ -283,25 +323,8 @@ class TestRevisionReadyGateBlocksSuccess:
 class TestRevisionReadyGateTimeoutHasRealHeadroom:
     """Regression test for issue #344: the poll bound must not be too short.
 
-    The #342 baseline gate polls with a 300s timeout — technically present,
-    technically bounded, and it passes every assertion above. But a real
-    prod deploy (run ``30659757841``, revision ``ca-mom-bot--0000036``)
-    took 340s+ to satisfy the readiness check even though the revision was
-    already confirmed genuinely ``Healthy``/``Provisioned``/
-    ``RunningAtMaxScale`` well before the gate gave up — a false-negative
-    CI failure on a deploy that actually succeeded.
-
-    This assertion is intentionally unconditional (it does not branch on
-    which readiness signal the gate polls): a discriminating check that
-    lets a ``healthState`` *mention* skip the headroom requirement would be
-    satisfiable by a one-line diagnostic echo that never actually changes
-    the poll's reliability, while leaving the 300s timeout and the
-    app-level-only comparison untouched — i.e. it would not have caught
-    this regression. Requiring real headroom regardless of signal choice
-    is the check that actually would have caught it, and both fix
-    directions from the issue (raise the timeout; or switch to polling the
-    revision-level ``healthState``/``provisioningState`` signal) satisfy it
-    with a one-token change to the bound.
+    Keep the 600s upper bound as protection for a legitimately slow rollout,
+    even though the revision-level signal should normally resolve much sooner.
     """
 
     def test_timeout_bound_has_headroom_over_observed_lag(self) -> None:
@@ -331,9 +354,7 @@ class TestRevisionReadyGateTimeoutHasRealHeadroom:
             f"readiness check even though the revision was already "
             f"genuinely Healthy/Provisioned/RunningAtMaxScale well before "
             f"that — so the #342 baseline's 300s timeout is not "
-            f"trustworthy. Raise the bound to >= "
-            f"{_MIN_SAFE_TIMEOUT_SECONDS}s for real headroom, regardless "
-            f"of which readiness signal (app-level "
-            f"latestReadyRevisionName, or revision-level "
-            f"healthState/provisioningState) the gate polls."
+            f"trustworthy. Keep the bound at >= "
+            f"{_MIN_SAFE_TIMEOUT_SECONDS}s while polling the revision-level "
+            f"healthState/provisioningState signal."
         )
