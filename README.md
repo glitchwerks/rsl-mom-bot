@@ -73,6 +73,7 @@ operations guidance.
 - [Release process](RELEASING.md)
 - [Infrastructure runbook](infra/aad-runbook.md)
 - [Secrets inventory](docs/secrets-inventory.md)
+- [Discord application profile](docs/operations/discord-application-profile.md)
 - [Changelog](CHANGELOG.md)
 - [GitHub Releases](https://github.com/glitchwerks/rsl-mom-bot/releases)
 
