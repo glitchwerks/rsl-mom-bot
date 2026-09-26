@@ -10,6 +10,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 <!-- Add a "### 📣 Highlights" sub-section here before cutting the next release.
      See RELEASING.md § "Discord Highlights convention" for what to write there. -->
 
+### Fixed
+
+- **Production deploy readiness now polls the target revision directly** — the deploy workflow captures the revision created by `az containerapp update` and waits for its revision-level `healthState=Healthy` and `provisioningState=Provisioned`, avoiding false failures caused by the parent Container App's unreliable `latestReadyRevisionName` field (#347).
+
 ## [1.5.1] - 2026-07-31
 
 ### Fixed
