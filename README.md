@@ -4,30 +4,28 @@ Production Discord service for a Raid: Shadow Legends guild. It provides
 scheduled reminders, member workflows, siege-web integrations, and operational
 automation from Azure Container Apps.
 
-## Production capabilities
+## Features
 
 | Area | Current behavior |
 | --- | --- |
 | Scheduled reminders | Posts Hydra, Chimera, Siege, and Hydra Tank Week notices from persisted schedules. |
-| Member notifications | Officers manage recurring weekly, biweekly, or monthly member DMs with `/member-notify-*` commands. |
+| Member notifications | Officers manage recurring weekly, biweekly, or monthly member DMs. |
 | Day-role synchronization | Receives authenticated siege-web events and applies or removes Discord siege-day roles. |
-| Post-condition preferences | Members view and update siege-web post-condition priorities through `/post-conditions*`. |
+| Post-condition preferences | Members view and update siege-web post-condition priorities from Discord. |
 | New-member onboarding | Welcomes new members, alerts subscribed officers, tracks first-message activity, and follows up on silent joins. |
-| Health and integrations | Exposes `/ping`, authenticated health endpoints, and the FastAPI sidecar used by siege-web. |
+| Health and integrations | Exposes health endpoints and an authenticated FastAPI sidecar used by siege-web. |
 
-The bot is deployed independently from infrastructure changes: application
-deployments use `deploy.yml`, while Azure Bicep changes use the separately
-gated `infra-deploy.yml` workflow. See [`CHANGELOG.md`](CHANGELOG.md) for the
-dated release history.
-
-## Current architecture
+## Architecture at a glance
 
 - A `discord.py` client and FastAPI sidecar run together in Azure Container Apps.
-- Azure Database for PostgreSQL stores reminders, member notifications, onboarding activity, and role state.
+- Azure Database for PostgreSQL stores application state.
 - Azure Key Vault supplies runtime secrets through managed identity.
 - Azure Monitor and Application Insights receive application and platform telemetry.
-- Bicep under [`infra/`](infra/) defines the production Azure resources.
-- GitHub Actions builds immutable images, runs migrations, deploys the app, applies infrastructure manually, and checks for undeployed infrastructure changes.
+- Bicep defines the production Azure resources; GitHub Actions builds, tests, and deploys immutable application images.
+
+Application and infrastructure deployments are independently gated. See the
+[release process](RELEASING.md) and [infrastructure runbook](infra/aad-runbook.md)
+for operational procedures.
 
 ## Supported commands
 
@@ -38,233 +36,54 @@ dated release history.
 | `/post-conditions`, `-get`, `-set` | View and update siege-web post-condition preferences. |
 | `/notify-new-members` | Turn officer DM alerts for new guild members on or off. |
 
-## Documentation
+## Developer quick start
 
-- **Documentation index:** [`docs/README.md`](docs/README.md) — separates current operational guidance from historical design records.
-- **Release process:** [`RELEASING.md`](RELEASING.md) — version, tag, release, notification, and deployment procedure.
-- **Infrastructure operations:** [`infra/aad-runbook.md`](infra/aad-runbook.md) — Azure identity, provisioning, deployment, and recovery procedures.
-- **Secrets inventory:** [`docs/secrets-inventory.md`](docs/secrets-inventory.md) — secret ownership, consumers, and rotation notes.
-- **Release history:** [`CHANGELOG.md`](CHANGELOG.md) and [GitHub Releases](https://github.com/glitchwerks/rsl-mom-bot/releases).
-
-Historical framework plans remain available under `docs/superpowers/` for
-design rationale. They describe the original implementation sequence and are
-not current runbooks or a statement of product maturity.
-
-## Prerequisites
-
-- **Python 3.12** — `python --version` must show `3.12.x`
-- **[uv](https://github.com/astral-sh/uv)** — fast Python package manager (`pip install uv` or see uv docs)
-- **Docker** — for container smoke tests (`docker build .`)
-
-## Local Development
+Requirements: Python 3.12, [uv](https://github.com/astral-sh/uv), and Docker.
 
 ```bash
-# 1. Create a virtual environment
-uv venv .venv
-
-# 2. Install the package and dev dependencies
+uv venv
 uv pip install -e ".[dev]"
 
-# 3. Run the test suite
-.venv/Scripts/python.exe -m pytest          # Windows
-# .venv/bin/python -m pytest               # Linux / macOS
-
-# 4. Lint and format checks
-.venv/Scripts/python.exe -m ruff check src/ tests/
-.venv/Scripts/python.exe -m black --check src/ tests/
-
-# 5. Type checking
-.venv/Scripts/python.exe -m mypy src/
-
-# 6. Container smoke build
+# Run checks
+uv run ruff check src/ tests/
+uv run black --check src/ tests/
+uv run mypy src/
+uv run pytest
 docker build .
 ```
 
-## Local Azure Access
-
-Mom-bot reads secrets from Azure Key Vault (`kv-mombot-eastus2`) at runtime via
-`DefaultAzureCredential`. On a developer laptop this resolves to your `az login`
-session — no managed identity or service principal needed locally.
-
-**Prerequisites:**
-
-```bash
-# 1. Log in to the mom-bot tenant (always pass --tenant to avoid cross-tenant confusion)
-az login --tenant 48bca6c3-6d4f-4884-bc1a-648ae2362a32
-
-# 2. Set the target subscription
-az account set --subscription 213aa1f8-32d1-4ffe-8f4d-6e60f1cd9dc0
-
-# 3. Verify
-az account show --query '{tenant:tenantId, sub:id}' -o table
-```
-
-**Role requirement:** your user account needs `Key Vault Secrets User` on
-`kv-mombot-eastus2`. Request this from the repo admin (@cbeaulieu-gt), or grant
-it yourself if you have Owner/User Access Administrator on the subscription:
-
-```bash
-MY_OID=$(az ad signed-in-user show --query id -o tsv)
-KV_ID=$(az keyvault show -g mom-bot -n kv-mombot-eastus2 --query id -o tsv)
-az role assignment create \
-  --role "Key Vault Secrets User" \
-  --assignee-object-id "$MY_OID" \
-  --assignee-principal-type User \
-  --scope "$KV_ID"
-```
-
-**Running locally with Key Vault secrets:**
-
-```bash
-# MOM_BOT_ENV=dev causes config.load_secret() to read dev-* secrets from KV.
-MOM_BOT_ENV=dev .venv/Scripts/python.exe -m mom_bot          # Windows (Git Bash)
-# MOM_BOT_ENV=dev .venv/bin/python -m mom_bot                # Linux / macOS
-```
-
-```powershell
-# PowerShell equivalent:
-$env:MOM_BOT_ENV = "dev"; .\.venv\Scripts\python.exe -m mom_bot
-```
-
-`DefaultAzureCredential` picks up your `az login` session automatically — no
-additional environment variables required. See `docs/secrets-inventory.md` for
-the full list of secrets and their purposes.
-
-**Once set up, launch with one command:**
-
-After the one-time `az login` and Key Vault role grant above, create a
-`.env.dev` file in the repo root with the same tenant and subscription GUIDs
-used in step 1 and step 2:
-
-```
-AZURE_TENANT_ID=48bca6c3-6d4f-4884-bc1a-648ae2362a32
-AZURE_SUBSCRIPTION_ID=213aa1f8-32d1-4ffe-8f4d-6e60f1cd9dc0
-```
-
-`.env.dev` is git-ignored — these GUIDs aren't secrets, but per repo
-convention it still isn't a tracked file. Then launch mom-bot with:
+Local development uses SQLite by default. To run the connected bot, authenticate
+to Azure, ensure the `dev-*` secrets are available in Key Vault, set
+`MOM_BOT_ENV=dev`, and run:
 
 ```bash
 ./scripts/dev-launch.sh
 ```
 
-This skips `az login` if you're already on the right tenant, always runs
-`az account set --subscription` to select the configured subscription, sets
-`MOM_BOT_ENV=dev`, and execs `python -m mom_bot` — activate your `.venv`
-first (or run it from a shell where `.venv` is on `PATH`), since the script
-uses whatever `python` resolves to rather than the venv interpreter
-explicitly. Use the manual steps below instead if you'd rather not use the
-wrapper, or for first-time setup (the wrapper still requires the Key Vault
-role grant to be done first).
+Use `MOM_BOT_DATABASE_URL` to override the database connection. Apply schema
+migrations with `uv run alembic upgrade head`.
 
-### Running the bot locally
+See the [secrets inventory](docs/secrets-inventory.md) for required configuration
+and the [documentation index](docs/README.md) for detailed development and
+operations guidance.
 
-After `Local Azure Access` is set up and `dev-discord-token` + `dev-guild-id`
-are seeded in `kv-mombot-eastus2`:
+## Documentation
 
-```powershell
-$env:MOM_BOT_ENV = "dev"
-.\.venv\Scripts\python.exe -m mom_bot
-```
+- [Documentation index](docs/README.md)
+- [Release process](RELEASING.md)
+- [Infrastructure runbook](infra/aad-runbook.md)
+- [Secrets inventory](docs/secrets-inventory.md)
+- [Changelog](CHANGELOG.md)
+- [GitHub Releases](https://github.com/glitchwerks/rsl-mom-bot/releases)
 
-The bot connects, logs connection details, and registers `/ping` to the dev
-guild. Test it from the dev guild's chat — the response is ephemeral (only
-visible to you). Seed `dev-guild-id` via:
-
-```bash
-az keyvault secret set \
-  --vault-name kv-mombot-eastus2 \
-  --name dev-guild-id \
-  --value "<your-discord-server-id>"
-```
-
-Enable Discord Developer Mode (User Settings → Advanced → Developer Mode) to
-right-click the server icon and copy the guild ID.
-
-## Database / Migrations
-
-Mom-bot uses [Alembic](https://alembic.sqlalchemy.org/) for schema migrations backed by SQLAlchemy.
-The local dev default is SQLite (developer convenience — no Azure credentials needed for schema work); production uses a PostgreSQL Flexible Server (`pg-mombot-*` in resource group `mom-bot`). The active database is selected via the `MOM_BOT_DATABASE_URL` environment variable (see `docs/secrets-inventory.md` for the canonical secret names).
-
-**Apply all pending migrations:**
-
-```bash
-alembic upgrade head
-```
-
-**Generate a new migration after adding or changing models:**
-
-```bash
-# 1. Generate the migration file (review it before applying)
-alembic revision --autogenerate -m "describe change"
-
-# 2. Review migrations/versions/<rev>_describe_change.py — remove any spurious ops
-
-# 3. Apply the migration
-alembic upgrade head
-```
-
-Set `MOM_BOT_DATABASE_URL` to override the default SQLite URL for prod/staging
-(e.g. `postgresql+psycopg://user:pass@host/dbname` — the project uses psycopg v3; `psycopg2` is not installed).
-
-## Project Structure
-
-```
-mom-bot/
-├── src/
-│   └── mom_bot/                        # Main package (src-layout)
-│       ├── __init__.py                 # Package version
-│       ├── __main__.py                 # `python -m mom_bot` entrypoint
-│       ├── main.py                     # Discord client, intents, slash commands
-│       ├── config.py                   # MOM_BOT_ENV-aware config + KV secret load
-│       ├── discord_authz.py            # Shared `require_manage_guild` authorization decorator
-│       ├── telemetry.py                # OpenTelemetry / Azure Monitor wiring
-│       ├── db/                         # SQLAlchemy DeclarativeBase
-│       ├── health/                     # /health/* liveness/readiness probes
-│       ├── migrations/                 # UAMI Container Apps Job entrypoint (acquire_token.py)
-│       ├── post_conditions/            # `/post-conditions*` — siege-web preferences proxy
-│       ├── reminders/                  # Channel reminders (Hydra/Chimera + Tank Week calendar logic)
-│       ├── roles/                      # Day-role sync (`POST /api/internal/role-sync`)
-│       ├── member_notifications/       # `/member-notify-*` per-member DM notification commands
-│       ├── new_member_alerts/          # `/notify-new-members` officer join-alert subscriptions
-│       ├── member_activity/            # 24h silent-joiner tracking + auto-kick
-│       └── sidecar/                    # HTTP sidecar (FastAPI, port 8001)
-├── migrations/                         # Alembic migration scripts (env.py, script.py.mako, versions/)
-├── tests/                              # Pytest suite (unit + integration): per-package subdirectories plus top-level test modules
-├── alembic.ini                         # Alembic config (local SQLite default)
-├── docs/                               # Operational docs and historical design records
-├── infra/                              # Bicep templates + AAD runbook
-├── pyproject.toml                      # PEP 621 metadata, tool configs
-├── Dockerfile                          # Container build (python:3.12-slim, non-root)
-└── .dockerignore
-```
-
-## CI Workflows
-
-All workflows live in `.github/workflows/`:
-
-| Workflow | Trigger | Purpose |
-| --- | --- | --- |
-| `ci.yml` | PR, push to `main` | Lint (ruff + `uv lock --check`), format check (black), type check (mypy), pytest, Docker build smoke test, shellcheck, pip-audit (non-blocking) |
-| `build-image.yml` | `workflow_run` after `ci.yml` succeeds on `main` | Builds and pushes the `:<sha>` GHCR image — structurally guaranteed to run only after CI is green for that exact SHA |
-| `deploy.yml` | Manual (`workflow_dispatch`) | Deploys a commit's image to the prod Container App: verifies the GHCR image exists, runs Alembic migrations via a Container Apps Job, then updates `ca-mom-bot` |
-| `infra-recency-check.yml` | Daily, relevant `infra/**` pushes to `main`, manual | Compares deployable infra files with the last successful `prod-infra` deployment and alerts the operator Discord channel when they diverge |
-| `infra-deploy.yml` | Manual (`workflow_dispatch`) | Applies Bicep templates to the prod subscription (mutates live Azure infra); records the deployed commit as a GitHub Deployment on the `prod-infra` environment (#321) |
-| `infra-what-if.yml` | PR touching `infra/**` | Posts an `az deployment sub create --what-if` diff as a PR comment; informational only, not a merge gate |
-| `release.yml` | Push of a `v*` tag | Publishes a GitHub Release (notes from `CHANGELOG.md`) and an immutable `:vX.Y.Z` GHCR image; posts the Discord release announcement |
-| `notify-discord-release.yml` | Manual (`workflow_dispatch`) | Re-posts the Discord release announcement for a given tag if the automatic post in `release.yml` failed |
-| `claude.yml` | Issue/PR comment created, PR review submitted, or issue opened/assigned | Delegates to the shared `glitchwerks/github-actions` `claude-tag-respond` reusable workflow (authorized users only) |
-| `claude-ci-fix.yml` | `workflow_run` after `ci.yml` completes | Delegates to the shared `glitchwerks/github-actions` `ci-failure` reusable workflow to attempt an automated fix when CI fails |
-
-`prod-infra` is a GitHub Deployments environment used only as a queryable ledger of what `infra-deploy.yml` last applied — it does not gate anything today. See `infra/aad-runbook.md` for first-time provisioning and `RELEASING.md` for the tag → release → deploy sequence.
-
-## Infrastructure runbook cross-reference
-
-`infra/aad-runbook.md` is the authoritative operational doc for Azure infrastructure work — AAD app registration, OIDC federated credentials, the Bicep apply steps (Step 5 pre-merge, Step 9.5 post-merge), and secret seeding. It also documents the live deploy-recency guardrail from [#318](https://github.com/glitchwerks/rsl-mom-bot/issues/318), including the webhook secret it needs and the `infra/scripts/**` coverage gap. This table only lists workflow entry points; consult the runbook for the operational procedure behind them.
+Historical framework plans remain available under `docs/superpowers/` for
+design rationale. They describe the original implementation sequence and are
+not current runbooks or a statement of product maturity.
 
 ## Versioning
 
-Mom-bot is its own product on its own version track, following semver from `v1.0.0` onward (see `RELEASING.md` § Versioning policy), separate from siege-web. The runtime is coupled to siege-web by design (shared Discord token, sidecar HTTP contract, shared guild) — the separate-repo / separate-versioning is for code-organization clarity, not real separability.
+Mom-bot follows semantic versioning on its own release track. Runtime contracts
+with siege-web are versioned and documented separately from application releases.
 
 ## License
 
