@@ -1,0 +1,174 @@
+name: Check infra deployment recency
+
+# Read-only guardrail for #315/#318. The workflow compares deployable infra
+# files on main with the commit most recently recorded by infra-deploy.yml.
+# It never logs into Azure and never applies infrastructure.
+
+on:
+  schedule:
+    - cron: '23 13 * * *'
+  push:
+    branches:
+      - main
+    paths:
+      - 'infra/**'
+      - '!infra/**/*.md'
+      - '!infra/main.json'
+      - '!infra/scripts/**'
+  workflow_dispatch:
+
+concurrency:
+  group: infra-recency-check
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  deployments: read
+
+jobs:
+  check:
+    name: Compare main with deployed infra
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Resolve latest deployed infra SHA
+        id: baseline
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          DEPLOYED_SHA=$(gh api --method GET \
+            "/repos/${GITHUB_REPOSITORY}/deployments" \
+            -f environment=prod-infra \
+            -f task='deploy:infra' \
+            -f per_page=1 \
+            --jq '.[0].sha')
+
+          # gh prints the literal string "null" when the filtered deployments
+          # list is empty. Treat both that value and empty output as no baseline.
+          if [ -z "$DEPLOYED_SHA" ] || [ "$DEPLOYED_SHA" = "null" ]; then
+            echo "::warning::No prod-infra deployment baseline exists. Run infra-deploy.yml from main."
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+            echo "sha=none" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          if ! printf '%s\n' "$DEPLOYED_SHA" | grep -qE '^[0-9a-f]{40}$'; then
+            echo "::error::Latest prod-infra deployment returned an invalid commit SHA."
+            exit 1
+          fi
+
+          if ! git cat-file -e "${DEPLOYED_SHA}^{commit}"; then
+            echo "::error::Deployed commit $DEPLOYED_SHA is not present in repository history."
+            exit 1
+          fi
+
+          echo "exists=true" >> "$GITHUB_OUTPUT"
+          echo "sha=$DEPLOYED_SHA" >> "$GITHUB_OUTPUT"
+          echo "Latest deployed infra SHA: $DEPLOYED_SHA"
+
+      - name: Compare deployable infra files
+        id: drift
+        env:
+          BASELINE_EXISTS: ${{ steps.baseline.outputs.exists }}
+          BASELINE_SHA: ${{ steps.baseline.outputs.sha }}
+        run: |
+          CURRENT_SHA=$(git rev-parse HEAD)
+          echo "current_sha=$CURRENT_SHA" >> "$GITHUB_OUTPUT"
+
+          if [ "$BASELINE_EXISTS" != "true" ]; then
+            echo "No deployed baseline is recorded." > infra-drift-files.txt
+            echo "detected=true" >> "$GITHUB_OUTPUT"
+            echo "reason=no-baseline" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          git diff --name-only "$BASELINE_SHA" "$CURRENT_SHA" -- \
+            'infra/**' \
+            ':(exclude)infra/**/*.md' \
+            ':(exclude)infra/main.json' \
+            ':(exclude)infra/scripts/**' \
+            > infra-drift-files.txt
+
+          if [ -s infra-drift-files.txt ]; then
+            echo "::warning::Deployable infra files have changed since $BASELINE_SHA was applied."
+            echo "detected=true" >> "$GITHUB_OUTPUT"
+            echo "reason=changed-files" >> "$GITHUB_OUTPUT"
+          else
+            echo "No deployable infra drift detected."
+            echo "detected=false" >> "$GITHUB_OUTPUT"
+            echo "reason=up-to-date" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Write check summary
+        env:
+          BASELINE_SHA: ${{ steps.baseline.outputs.sha }}
+          CURRENT_SHA: ${{ steps.drift.outputs.current_sha }}
+          DRIFT_DETECTED: ${{ steps.drift.outputs.detected }}
+        run: |
+          {
+            echo "## Infra deployment recency"
+            echo
+            echo "| Field | Value |"
+            echo "|---|---|"
+            echo "| Last deployed SHA | \`$BASELINE_SHA\` |"
+            echo "| Current main SHA | \`$CURRENT_SHA\` |"
+            echo "| Drift detected | \`$DRIFT_DETECTED\` |"
+            if [ "$DRIFT_DETECTED" = "true" ]; then
+              echo
+              echo "### Changed deployable files"
+              echo '```text'
+              cat infra-drift-files.txt
+              echo '```'
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Alert Discord on infra drift
+        if: steps.drift.outputs.detected == 'true'
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_INFRA_ALERT_WEBHOOK_URL }}
+          BASELINE_SHA: ${{ steps.baseline.outputs.sha }}
+          CURRENT_SHA: ${{ steps.drift.outputs.current_sha }}
+          DRIFT_REASON: ${{ steps.drift.outputs.reason }}
+        run: |
+          if [ -z "$DISCORD_WEBHOOK_URL" ]; then
+            echo "::error::DISCORD_INFRA_ALERT_WEBHOOK_URL is not configured; infra drift could not be reported."
+            exit 1
+          fi
+
+          if [ "$DRIFT_REASON" = "no-baseline" ]; then
+            SUMMARY="No successful prod-infra deployment baseline is recorded. Run infra-deploy.yml from main to establish one."
+          else
+            SUMMARY="Deployable infrastructure files on main differ from the last recorded prod-infra deployment."
+          fi
+
+          CHANGED_FILES=$(sed -n '1,50{s/^/• /;p}' infra-drift-files.txt)
+          RUN_URL="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          DESCRIPTION=$(printf '%s\n\nLast deployed: `%s`\nCurrent main: `%s`\n\n%s' \
+            "$SUMMARY" "$BASELINE_SHA" "$CURRENT_SHA" "$CHANGED_FILES")
+
+          PAYLOAD=$(jq -n \
+            --arg title "⚠️ mom-bot infrastructure drift detected" \
+            --arg url "$RUN_URL" \
+            --arg description "$DESCRIPTION" \
+            '{embeds: [{title: $title, url: $url, description: $description, color: 15158332}]}'
+          )
+
+          RESPONSE_BODY=$(mktemp)
+          HTTP_STATUS=$(curl -sS -o "$RESPONSE_BODY" -w '%{http_code}' \
+            -H 'Content-Type: application/json' \
+            -d "$PAYLOAD" \
+            "$DISCORD_WEBHOOK_URL")
+
+          if [ "$HTTP_STATUS" -lt 200 ] || [ "$HTTP_STATUS" -ge 300 ]; then
+            echo "::error::Discord webhook returned HTTP $HTTP_STATUS; infra drift alert was not delivered."
+            cat "$RESPONSE_BODY"
+            exit 1
+          fi
+
+          echo "Infra drift alert delivered to Discord (HTTP $HTTP_STATUS)."

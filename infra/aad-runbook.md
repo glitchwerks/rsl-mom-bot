@@ -863,15 +863,14 @@ Skipping Step 9.5 after an `infra/**` merge is exactly what caused incident
 was declared in Bicep but the apply that would have created it in Azure was
 never dispatched, and nothing failed or warned for over four days.
 
-**Deploy-recency guardrail — planned, tracked in [#318](https://github.com/glitchwerks/rsl-mom-bot/issues/318),
-until it lands this section describes intended behavior only.** A new
-workflow, `infra-recency-check.yml`, will compare `main`'s current
+**Deploy-recency guardrail.** The
+`infra-recency-check.yml` workflow compares `main`'s current
 `infra/**` state against the last commit `infra-deploy.yml` actually applied
 — recorded as a GitHub Deployment on the `prod-infra` environment by
 `infra-deploy.yml` itself (see [#316](https://github.com/glitchwerks/rsl-mom-bot/issues/316))
-— and alert to Discord when they diverge. It re-checks daily, so an ignored
-alert keeps nagging until Step 9.5 runs. Once #318 lands, skipping this step
-will trip that alert rather than fail silently. Full design and rationale:
+— and alerts Discord when they diverge. It re-checks daily, so an ignored
+alert keeps nagging until Step 9.5 runs. Skipping this step now trips that
+alert rather than failing silently. Full design and rationale:
 [#315](https://github.com/glitchwerks/rsl-mom-bot/issues/315).
 
 **What the guardrail does NOT cover.** Its diff is scoped to `infra/**` minus
@@ -883,8 +882,7 @@ guardrail ever noticing. Treat `infra/scripts/**` changes as requiring the
 same manual operator follow-through this runbook already asks for, just
 without the automated safety net.
 
-**Required repo secret — set this up now, ahead of #318, so the guardrail
-can alert immediately once it lands:** `DISCORD_INFRA_ALERT_WEBHOOK_URL`.
+**Required repo secret:** `DISCORD_INFRA_ALERT_WEBHOOK_URL`.
 This is deliberately separate from `DISCORD_RELEASE_WEBHOOK_URL` (documented
 in `RELEASING.md § Discord Highlights convention`) — release announcements
 are audience-facing, infra drift alerts are operator-facing, and mixing them
