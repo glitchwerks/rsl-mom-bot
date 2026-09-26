@@ -88,4 +88,4 @@ with siege-web are versioned and documented separately from application releases
 
 ## License
 
-No open-source license has been declared for this repository.
+Mom-bot is open-source software licensed under the [MIT License](LICENSE).
