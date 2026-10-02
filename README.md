@@ -25,7 +25,9 @@ automation from Azure Container Apps.
 
 Application and infrastructure deployments are independently gated. See the
 [release process](RELEASING.md) and [infrastructure runbook](infra/aad-runbook.md)
-for operational procedures.
+for operational procedures. A read-only deployment-recency check alerts Slack
+when deployable infrastructure on `main` differs from the last recorded deployment;
+its required `SLACK_INFRA_ALERT_WEBHOOK_URL` secret is documented in the runbook.
 
 ## Supported commands
 

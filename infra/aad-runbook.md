@@ -870,7 +870,7 @@ never dispatched, and nothing failed or warned for over four days.
 `infra/**` state against the last commit `infra-deploy.yml` actually applied
 — recorded as a GitHub Deployment on the `prod-infra` environment by
 `infra-deploy.yml` itself (see [#316](https://github.com/glitchwerks/rsl-mom-bot/issues/316))
-— and alerts Discord when they diverge. It re-checks daily, so an ignored
+— and alerts the development Slack channel when they diverge. It re-checks daily, so an ignored
 alert keeps nagging until Step 9.5 runs. Skipping this step now trips that
 alert rather than failing silently. Full design and rationale:
 [#315](https://github.com/glitchwerks/rsl-mom-bot/issues/315).
@@ -884,14 +884,14 @@ guardrail ever noticing. Treat `infra/scripts/**` changes as requiring the
 same manual operator follow-through this runbook already asks for, just
 without the automated safety net.
 
-**Required repo secret:** `DISCORD_INFRA_ALERT_WEBHOOK_URL`.
-This is deliberately separate from `DISCORD_RELEASE_WEBHOOK_URL` (documented
-in `RELEASING.md § Discord Highlights convention`) — release announcements
-are audience-facing, infra drift alerts are operator-facing, and mixing them
-trains you to skim the channel. To create the webhook: open the target
-Discord channel → Edit Channel → Integrations → Webhooks → New Webhook →
-Copy Webhook URL. Add that URL as a repository secret at
+**Required repo secret:** `SLACK_INFRA_ALERT_WEBHOOK_URL`.
+Create or select a Slack app for the development workspace, enable Incoming
+Webhooks, choose **Add New Webhook to Workspace**, and select the channel that
+should receive development and infrastructure alerts. Copy the generated
+webhook URL and add it as a repository secret at
 `https://github.com/glitchwerks/rsl-mom-bot/settings/secrets/actions`.
+The webhook is bound to the selected Slack channel, so the workflow does not
+store a channel name or ID.
 
 ---
 
