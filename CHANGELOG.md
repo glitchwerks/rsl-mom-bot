@@ -23,6 +23,7 @@ This maintenance release makes production deployment checks more reliable and al
 
 ### Fixed
 
+- **Revision state parsing corrected** — handles Azure's multiline TSV response so healthy revisions pass the deployment gate and failed provisioning stops immediately (#373).
 - **Production deployment readiness check** — polls the revision created by the deploy instead of relying on the Container App's lagging readiness field (#355).
 - **Dependabot CI coverage** — Dependabot pull requests run the full test suite (#358).
 - **Slack alert secret reference** — uses `SLACK_ALERT_BOT_WEBHOOK`, matching the configured secret name (#370).

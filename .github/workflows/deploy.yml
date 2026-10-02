@@ -259,7 +259,10 @@ jobs:
             set -e
 
             if [ $STATUS -eq 0 ]; then
-              read -r HEALTH_STATE PROVISIONING_STATE <<< "$REVISION_STATES"
+              # Azure formats a queried list as one TSV value per line.
+              mapfile -t STATE_LINES <<< "$REVISION_STATES"
+              HEALTH_STATE="${STATE_LINES[0]:-}"
+              PROVISIONING_STATE="${STATE_LINES[1]:-}"
               if [ "$HEALTH_STATE" = "Healthy" ] && [ "$PROVISIONING_STATE" = "Provisioned" ]; then
                 echo "[revision-ready] Revision $TARGET_REVISION is Healthy and Provisioned."
                 exit 0
