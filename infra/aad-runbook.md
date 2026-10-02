@@ -884,7 +884,7 @@ guardrail ever noticing. Treat `infra/scripts/**` changes as requiring the
 same manual operator follow-through this runbook already asks for, just
 without the automated safety net.
 
-**Required repo secret:** `SLACK_INFRA_ALERT_WEBHOOK_URL`.
+**Required repo secret:** `SLACK_ALERT_BOT_WEBHOOK`.
 Create or select a Slack app for the development workspace, enable Incoming
 Webhooks, choose **Add New Webhook to Workspace**, and select the channel that
 should receive development and infrastructure alerts. Copy the generated
