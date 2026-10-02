@@ -71,7 +71,7 @@ def test_guardrail_is_read_only_and_alerts_to_dedicated_webhook() -> None:
     text = _workflow_text()
 
     assert "deployments: read" in text
-    assert "SLACK_INFRA_ALERT_WEBHOOK_URL" in text
+    assert "SLACK_ALERT_BOT_WEBHOOK" in text
     assert "DISCORD_INFRA_ALERT_WEBHOOK_URL" not in text
     assert "'{text: $text}'" in text
     assert "az login" not in text
@@ -222,7 +222,7 @@ def test_slack_notification_fails_before_curl_without_secret(
     result = _run_notification(notification_script, notification_env, tmp_path)
 
     assert result.returncode != 0
-    assert "::error::SLACK_INFRA_ALERT_WEBHOOK_URL is not configured" in result.stdout
+    assert "::error::SLACK_ALERT_BOT_WEBHOOK is not configured" in result.stdout
     assert not Path(notification_env["CURL_ARGS"]).exists()
     assert "delivered to Slack" not in result.stdout
 

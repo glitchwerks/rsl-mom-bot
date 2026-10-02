@@ -131,13 +131,13 @@ jobs:
       - name: Alert Slack on infra drift
         if: steps.drift.outputs.detected == 'true'
         env:
-          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_INFRA_ALERT_WEBHOOK_URL }}
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_ALERT_BOT_WEBHOOK }}
           BASELINE_SHA: ${{ steps.baseline.outputs.sha }}
           CURRENT_SHA: ${{ steps.drift.outputs.current_sha }}
           DRIFT_REASON: ${{ steps.drift.outputs.reason }}
         run: |
           if [ -z "$SLACK_WEBHOOK_URL" ]; then
-            echo "::error::SLACK_INFRA_ALERT_WEBHOOK_URL is not configured; infra drift could not be reported."
+            echo "::error::SLACK_ALERT_BOT_WEBHOOK is not configured; infra drift could not be reported."
             exit 1
           fi
 
