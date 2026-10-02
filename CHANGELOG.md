@@ -10,20 +10,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 <!-- Add a "### 📣 Highlights" sub-section here before cutting the next release.
      See RELEASING.md § "Discord Highlights convention" for what to write there. -->
 
-### Documentation
+## [1.5.2] - 2026-10-02
 
-- **Production documentation refreshed** — the README now describes the deployed service and current architecture, active runbooks no longer present completed epics or the retired SQLite production setup as future work, and historical plans are clearly separated from current operational guidance (#361).
-- **MIT license added** — the repository now includes the full MIT license text and declares the license in its package metadata and README.
+### 📣 Highlights
+
+This maintenance release makes production deployment checks more reliable and alerts operators when infrastructure changes on `main` have not been deployed. It also improves CI and local setup and refreshes the production documentation. There are no changes to member-facing commands.
+
+### Added
+
+- **Infrastructure deployment drift alert** — a read-only workflow checks deployable `infra/**` changes against the last recorded `prod-infra` deployment and sends an alert to Slack when they differ (#356, #360).
+- **One-command local development launcher** — starts the services needed for local bot development (#349).
 
 ### Fixed
 
-- **Discord profile maturity wording corrected** — the production About Me copy and its external Developer Portal source of truth are now documented so outdated WIP wording does not return (#362).
+- **Production deployment readiness check** — polls the revision created by the deploy instead of relying on the Container App's lagging readiness field (#355).
+- **Dependabot CI coverage** — Dependabot pull requests run the full test suite (#358).
+- **Slack alert secret reference** — uses `SLACK_ALERT_BOT_WEBHOOK`, matching the configured secret name (#370).
 
-- **Dependabot pull requests now run the full CI suite** — the workflow explicitly permits `dependabot[bot]` while retaining the existing author-association restriction for other external contributors (#357).
+### Infrastructure
 
-- **Infrastructure drift now triggers an operator alert** — a read-only daily guardrail compares deployable `infra/**` files on `main` with the last successful `prod-infra` deployment and posts to the development Slack channel when they diverge (#318, #359).
+- **GitHub Actions updates** — `actions/setup-python` 6.3.0 → 7.0.0 (#354), `astral-sh/setup-uv` 4.2.0 → 10.2.0 (#353), `docker/login-action` 4.5.1 → 4.6.0 (#352), `azure/login` 2.3.0 → 3.1.0 (#351), and `marocchino/sticky-pull-request-comment` 3.0.4 → 3.0.5 (#350).
 
-- **Production deploy readiness now polls the target revision directly** — the deploy workflow captures the revision created by `az containerapp update` and waits for its revision-level `healthState=Healthy` and `provisioningState=Provisioned`, avoiding false failures caused by the parent Container App's unreliable `latestReadyRevisionName` field (#347).
+### Documentation
+
+- **Production guidance refreshed** — the README and runbooks describe the deployed architecture and separate historical plans from current operations (#364).
+- **Discord profile source documented** — records where the About Me text is managed and proposes production wording; the live profile edit and verification remain tracked in #362 (#365).
+- **MIT license added** — repository license and package metadata now declare MIT (#366).
+- **Azure login action annotations corrected** — workflow comments now match the pinned action version (#363).
 
 ## [1.5.1] - 2026-07-31
 
@@ -245,7 +258,8 @@ v1.1.0 makes mom-bot observable and hardens its infrastructure for the long run:
 
 **Pre-1.0 history**: Initial pre-1.0 development — see `git log` and the merged PR history for full provenance.
 
-[Unreleased]: https://github.com/glitchwerks/rsl-mom-bot/compare/v1.5.1...HEAD
+[Unreleased]: https://github.com/glitchwerks/rsl-mom-bot/compare/v1.5.2...HEAD
+[1.5.2]: https://github.com/glitchwerks/rsl-mom-bot/compare/v1.5.1...v1.5.2
 [1.5.1]: https://github.com/glitchwerks/rsl-mom-bot/compare/v1.5.0...v1.5.1
 [1.5.0]: https://github.com/glitchwerks/rsl-mom-bot/compare/v1.4.1...v1.5.0
 [1.4.1]: https://github.com/glitchwerks/rsl-mom-bot/compare/v1.4.0...v1.4.1
