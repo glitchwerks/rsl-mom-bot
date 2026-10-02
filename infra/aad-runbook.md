@@ -205,7 +205,7 @@ az role assignment list --assignee $gha --all -o table
 
 ### Expected verify output
 
-After Phase 0.5 lands, `az role assignment list` should show these three assignments:
+After completing this bootstrap step, `az role assignment list` should show these three assignments:
 
 | Role | Scope |
 |---|---|
@@ -219,7 +219,7 @@ After Phase 0.5 lands, `az role assignment list` should show these three assignm
 
 If `az role definition create` fails for tenant-policy or naming-collision reasons, grant built-in `Contributor` at sub scope as an expedient — but file a follow-up issue immediately to swap it for the custom role. Don't leave Contributor silently in place.
 
-See the decision-log extraction on issue #96 ([comment](https://github.com/glitchwerks/mom-bot/issues/96#issuecomment-4569696448)) for design rationale. Full plan content recoverable from git history (deleted in PR #247).
+See the decision-log extraction on issue #96 ([comment](https://github.com/glitchwerks/rsl-mom-bot/issues/96#issuecomment-4569696448)) for design rationale. Full plan content recoverable from git history (deleted in PR #247).
 
 ---
 
@@ -326,7 +326,7 @@ Expected output confirms: role is `Role Based Access Control Administrator`, sco
 >
 > **Note on Bicep vs bootstrap:** `Container Apps Contributor` and `Key Vault Secrets Officer` were previously granted by Bicep (`containerapp.bicep` and `keyvault.bicep`). As of #174 those Bicep resources are removed — the grants are out-of-band bootstrap only. The ABAC condition on `Role Based Access Control Administrator` is narrowed accordingly: it now covers only `Key Vault Secrets User` (the one role Bicep still needs to assign, to `mi-mom-bot`).
 
-**Design rationale:** Granting at RG scope (not KV scope) gives the SP the minimum scope necessary for the Bicep KV role-assignment resource while avoiding subscription-wide RBAC authority. The ABAC condition is the safety layer — without it, RBAC Admin would allow the SP to assign any role to any principal within the RG. See [#167](https://github.com/glitchwerks/mom-bot/issues/167) for the full decision thread.
+**Design rationale:** Granting at RG scope (not KV scope) gives the SP the minimum scope necessary for the Bicep KV role-assignment resource while avoiding subscription-wide RBAC authority. The ABAC condition is the safety layer — without it, RBAC Admin would allow the SP to assign any role to any principal within the RG. See [#167](https://github.com/glitchwerks/rsl-mom-bot/issues/167) for the full decision thread.
 
 ---
 
@@ -378,7 +378,7 @@ This step replaces the `administrators` resources that used to live in
 `infra/modules/postgres.bicep`; they were moved here because the ARM resource
 races against the server's post-provision Updating window (issue #106).
 
-> **Issue #255 (Phase 3):** `mom-bot-gha` is no longer registered as a Postgres
+> **Current migration identity:** `mom-bot-gha` is not registered as a Postgres
 > Entra admin. Migrations now run via the Container Apps Job `job-mom-bot-migrate`
 > under `mi-mom-bot` UAMI (issue #255). `mom-bot-gha` cannot connect to Postgres
 > directly from GHA runners — the Postgres firewall allows only CAE outbound IPs.
@@ -725,8 +725,10 @@ az keyvault secret set --vault-name kv-mombot-eastus2 --name dev-new-members-cha
 # Local dev: SQLite file in the working directory
 az keyvault secret set --vault-name kv-mombot-eastus2 --name dev-database-url  --value "sqlite:///./mom_bot_dev.db" | Out-Null
 
-# Prod: SQLite on Container Apps volume (placeholder for PostgreSQL in Epic 1+)
-az keyvault secret set --vault-name kv-mombot-eastus2 --name prod-database-url --value "sqlite:////data/mom_bot.db" | Out-Null
+# Prod: PostgreSQL Flexible Server with managed-identity token injection.
+# Replace <server-fqdn> with the Bicep output/current server FQDN.
+$prodDatabaseUrl = "postgresql+psycopg://mi-mom-bot@<server-fqdn>:5432/mom_bot?sslmode=require"
+az keyvault secret set --vault-name kv-mombot-eastus2 --name prod-database-url --value $prodDatabaseUrl | Out-Null
 ```
 
 ### App Insights connection string — Bicep-managed since PR #182
@@ -808,7 +810,7 @@ shared value). At that point the two slots legitimately diverge.
 
 ## Step 9 — Run the deploy workflow (post-merge)
 
-This step runs **after PR #21 merges to `main`**. The `workflow_dispatch`
+This step runs after the application change has merged to `main`. The `workflow_dispatch`
 trigger on `deploy.yml` fires from the repo's default branch only, so the
 deploy workflow file must already be on `main` before you can invoke it.
 Treat Step 9 as the first post-merge smoke test, not a pre-merge gate.
@@ -826,8 +828,8 @@ image to `ca-mom-bot`. First run succeeds if:
 2. Repo variables are set (Step 6)
 3. A container image exists at `ghcr.io/glitchwerks/mom-bot:<sha>`
 
-> Image build+push to GHCR is Epic 1 work. For v0 smoke testing, push a
-> placeholder image manually and rerun.
+The build job publishes the immutable `ghcr.io/glitchwerks/mom-bot:<sha>` image
+before the deploy job updates the Container App.
 
 ---
 
@@ -899,10 +901,10 @@ store a channel name or ID.
 the Container App has ingress — the mode governs traffic routing, not revision lifecycle
 in the absence of HTTP traffic. Because `ca-mom-bot` is ingress-less, deploying a new
 image does not deactivate the old revision; stale revisions accumulate and consume
-quota. Until Phase 2 of [#83](https://github.com/glitchwerks/mom-bot/issues/83)
+quota. Until Phase 2 of [#83](https://github.com/glitchwerks/rsl-mom-bot/issues/83)
 automates this inside the deploy workflow, run the following snippet manually after
 each `az containerapp update` (i.e., after each successful Step 9 run). Tracked in
-[#96](https://github.com/glitchwerks/mom-bot/issues/96).
+[#96](https://github.com/glitchwerks/rsl-mom-bot/issues/96).
 
 ```powershell
 # Collect names of all currently active revisions on the Container App
@@ -921,14 +923,14 @@ $active -split "`n" | Where-Object { $_ -and $_ -ne $latest } | ForEach-Object {
 }
 ```
 
-Automation tracked in [#83](https://github.com/glitchwerks/mom-bot/issues/83); see `deploy.yml` and `scripts/deactivate-old-revisions.sh` once that work lands.
+Automation tracked in [#83](https://github.com/glitchwerks/rsl-mom-bot/issues/83); see `deploy.yml` and `scripts/deactivate-old-revisions.sh` once that work lands.
 
 ---
 
 ## Dev-laptop ad-hoc Postgres access
 
 > **Why this is a runbook step, not Bicep:** The `operatorIpAddress` param was
-> removed from Bicep in [#166](https://github.com/glitchwerks/mom-bot/issues/166).
+> removed from Bicep in [#166](https://github.com/glitchwerks/rsl-mom-bot/issues/166).
 > Operator IPs change frequently (VPNs, ISP DHCP rotation, travel) — managing
 > them in Bicep means every IP change triggers a Bicep deploy. Instead, open a
 > rule when you need it and delete it when you are done. The Postgres server
@@ -1005,12 +1007,13 @@ az postgres flexible-server firewall-rule create `
 
 ## Notes
 
-### Placeholder container image
+### Cold-start fallback container image
 
 The `containerImage` parameter defaults to `mcr.microsoft.com/k8se/quickstart:latest` —
-Microsoft's public Container Apps hello-world image. The Container App provisions and serves
-a static page until Epic 1 wires up image build+push to GHCR. To deploy a real mom-bot image
-at any time, override at the CLI:
+Microsoft's public Container Apps hello-world image. This makes a brand-new infrastructure
+deployment pullable before the first application image exists. Normal production deploys use
+the immutable image produced by `deploy.yml`. To apply infrastructure with a specific mom-bot
+image, override the parameter at the CLI:
 
 ```powershell
 az deployment sub create `
@@ -1068,7 +1071,7 @@ risks database corruption.
 
 EmptyDir (the default Container Apps ephemeral volume) loses all state on every
 revision swap — unacceptable for a database. PostgreSQL is the correct long-term
-answer (see Epic #91, closed — decision-log extraction at [#91 comment](https://github.com/glitchwerks/mom-bot/issues/91#issuecomment-4569696957)), but standing up a managed Postgres
+answer (see Epic #91, closed — decision-log extraction at [#91 comment](https://github.com/glitchwerks/rsl-mom-bot/issues/91#issuecomment-4569696957)), but standing up a managed Postgres
 instance is out of scope for the initial bot bringup. AzureFile Standard LRS
 gives a persistent, SMB-mountable file share for under $2/month with no managed
 database overhead. It is explicitly a **stopgap** — the `prod-database-url` KV
@@ -1249,7 +1252,7 @@ Run periodically to validate the recovery path is functional:
 The SQLite-on-AzureFile setup is a **temporary stopgap**. The production target
 is a managed PostgreSQL instance (Azure Database for PostgreSQL Flexible Server or
 equivalent). Migration was tracked under Epic #91 (closed) — the full plan
-was extracted to [#91 comment](https://github.com/glitchwerks/mom-bot/issues/91#issuecomment-4569696957)
+was extracted to [#91 comment](https://github.com/glitchwerks/rsl-mom-bot/issues/91#issuecomment-4569696957)
 and the plan file was removed in PR #247. The `prod-database-url` KV secret and
 the `MOM_BOT_DATABASE_URL` env var are already wired to accept a PostgreSQL
 connection string — no application code change is required for the migration,

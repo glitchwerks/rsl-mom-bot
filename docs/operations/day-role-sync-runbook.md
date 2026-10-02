@@ -181,12 +181,12 @@ skip steps — the sequence exists to catch configuration errors before live tra
 
 ## 2. Log queries
 
-Mom-bot emits structured log lines to stdout. In the deployed environment, stdout is routed to
-the Container App's log stream, which can be tailed via the Azure Portal or CLI. Application
-Insights integration is planned but not yet wired (the `{env}-app-insights-conn-string` Key Vault
-secret is present but set to `PLACEHOLDER` as of the Epic 2.6 deployment — see
-`docs/secrets-inventory.md`). The queries below are written in plain log-grep form for the
-Container App log stream.
+Mom-bot emits structured log lines to stdout. In the deployed environment, stdout is available in
+the Container App log stream and is routed to Azure Monitor by the Container Apps environment's
+diagnostic settings. Application Insights is provisioned by Bicep and its connection string is
+injected directly into the container; the old Key Vault connection-string entries are not runtime
+dependencies (see `docs/secrets-inventory.md`). The queries below are written in plain log-grep
+form for the Container App log stream.
 
 ### Accessing mom-bot logs
 
