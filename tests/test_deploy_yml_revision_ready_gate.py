@@ -29,7 +29,12 @@ The gate must therefore poll the specific revision resource directly.
 
 from __future__ import annotations
 
+import json
+import os
 import re
+import subprocess
+import sys
+import textwrap
 from pathlib import Path
 
 import pytest
@@ -358,3 +363,53 @@ class TestRevisionReadyGateTimeoutHasRealHeadroom:
             f"{_MIN_SAFE_TIMEOUT_SECONDS}s while polling the revision-level "
             f"healthState/provisioningState signal."
         )
+
+
+@pytest.mark.parametrize(
+    ("responses", "expected_exit", "expected_calls"),
+    [
+        (["Healthy\nProvisioned\n"], 0, 1),
+        (["Unhealthy\nProvisioning\n", "Healthy\nProvisioned\n"], 0, 2),
+        (["Unhealthy\nFailed\n"], 1, 1),
+        (["Healthy\n"], 1, 60),
+    ],
+)
+def test_gate_executes_with_azure_multiline_tsv(
+    tmp_path: Path, responses: list[str], expected_exit: int, expected_calls: int
+) -> None:
+    """Run the workflow shell with the actual Azure list-to-TSV response shape."""
+    gate = _locate_revision_ready_gate(_read_workflow_text())
+    script = textwrap.dedent(gate.split("        run: |\n", 1)[1])
+    script = script.replace("${{ steps.deploy_app.outputs.revision }}", "test-revision")
+    counter = tmp_path / "calls"
+    az = tmp_path / "az"
+    az.write_text(
+        f"#!{sys.executable}\n"
+        "import json, os\n"
+        "from pathlib import Path\n"
+        "p = Path(os.environ['CALL_COUNTER'])\n"
+        "n = int(p.read_text()) if p.exists() else 0\n"
+        "p.write_text(str(n + 1))\n"
+        "responses = json.loads(os.environ['AZ_RESPONSES'])\n"
+        "print(responses[min(n, len(responses) - 1)], end='')\n"
+    )
+    az.chmod(0o755)
+    sleep = tmp_path / "sleep"
+    sleep.write_text("#!/bin/sh\nexit 0\n")
+    sleep.chmod(0o755)
+    env = dict(os.environ)
+    env.update(
+        PATH=f"{tmp_path}:{env['PATH']}",
+        CALL_COUNTER=str(counter),
+        AZ_RESPONSES=json.dumps(responses),
+        AZURE_RESOURCE_GROUP="test-rg",
+    )
+    result = subprocess.run(
+        ["bash", "-e", "-o", "pipefail", "-c", script],
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=15,
+    )
+    assert result.returncode == expected_exit, result.stdout + result.stderr
+    assert int(counter.read_text()) == expected_calls
