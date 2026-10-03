@@ -10,6 +10,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 <!-- Add a "### 📣 Highlights" sub-section here before cutting the next release.
      See RELEASING.md § "Discord Highlights convention" for what to write there. -->
 
+## [1.5.3] - 2026-10-03
+
+### 📣 Highlights
+
+Mom-bot's Discord profile now describes the production service accurately. This patch also updates the Docker actions used to build and publish release images; bot commands and APIs are unchanged.
+
+### Fixed
+
+- **Discord bot profile wording** — the live About Me text now uses the documented production description, verified in Discord (#362).
+
+### Infrastructure
+
+- **Docker GitHub Actions updates** — `docker/setup-buildx-action` 4.2.0 → 4.4.1 (#368) and `docker/build-push-action` 7.3.0 → 7.4.0 (#369).
+
 ## [1.5.2] - 2026-10-02
 
 ### 📣 Highlights
@@ -259,7 +273,8 @@ v1.1.0 makes mom-bot observable and hardens its infrastructure for the long run:
 
 **Pre-1.0 history**: Initial pre-1.0 development — see `git log` and the merged PR history for full provenance.
 
-[Unreleased]: https://github.com/glitchwerks/rsl-mom-bot/compare/v1.5.2...HEAD
+[Unreleased]: https://github.com/glitchwerks/rsl-mom-bot/compare/v1.5.3...HEAD
+[1.5.3]: https://github.com/glitchwerks/rsl-mom-bot/compare/v1.5.2...v1.5.3
 [1.5.2]: https://github.com/glitchwerks/rsl-mom-bot/compare/v1.5.1...v1.5.2
 [1.5.1]: https://github.com/glitchwerks/rsl-mom-bot/compare/v1.5.0...v1.5.1
 [1.5.0]: https://github.com/glitchwerks/rsl-mom-bot/compare/v1.4.1...v1.5.0
