@@ -31,6 +31,8 @@ import sqlalchemy as sa
 from alembic import command
 from alembic.config import Config
 
+from mom_bot.db import build_engine, build_session_factory
+
 # ---------------------------------------------------------------------------
 # Session-scoped autouse fixture: prevent alembic from disabling loggers
 # ---------------------------------------------------------------------------
@@ -154,6 +156,27 @@ def pg_url() -> Any:
 # ---------------------------------------------------------------------------
 # Tests
 # ---------------------------------------------------------------------------
+
+
+@requires_docker
+def test_portable_password_migrations_and_runtime(pg_url: str, monkeypatch: Any) -> None:
+    """Exercise the shared password path on CI's disposable PostgreSQL instance."""
+    monkeypatch.setenv("MOM_BOT_DATABASE_AUTH", "password")
+    monkeypatch.setenv("MOM_BOT_DATABASE_URL", pg_url)
+    monkeypatch.delenv("AZURE_CLIENT_ID", raising=False)
+    with (
+        patch("mom_bot.db.ManagedIdentityCredential", side_effect=AssertionError("Azure invoked")),
+        patch("mom_bot.db.build_engine", wraps=build_engine) as shared,
+    ):
+        command.upgrade(_make_pg_alembic_config(pg_url), "head")
+        shared.assert_called_once()
+        factory = build_session_factory(pg_url)
+        try:
+            with factory() as session:
+                assert session.execute(sa.text("SELECT version_num FROM alembic_version")).scalar()
+                assert _EXPECTED_TABLES <= set(sa.inspect(session.connection()).get_table_names())
+        finally:
+            factory.kw["bind"].dispose()
 
 
 @requires_docker

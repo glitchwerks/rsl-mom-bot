@@ -11,6 +11,7 @@ language describe the state of the project when they were written.
 - [`../RELEASING.md`](../RELEASING.md) — release and production deployment procedure.
 - [`../infra/aad-runbook.md`](../infra/aad-runbook.md) — Azure provisioning, identity, infrastructure deployment, and recovery.
 - [`secrets-inventory.md`](secrets-inventory.md) — canonical secret inventory and consumers.
+- [`operations/portable-configuration.md`](operations/portable-configuration.md) — opt-in secret sources and database authentication for portable hosting, with Azure compatibility and recovery boundaries.
 - [`discord-permissions-reference.md`](discord-permissions-reference.md) — current Discord permissions and intents.
 - [`operations/day-role-sync-runbook.md`](operations/day-role-sync-runbook.md) — day-role synchronization operations and troubleshooting.
 - [`operations/day-role-sync-smoke.md`](operations/day-role-sync-smoke.md) — live smoke validation for day-role synchronization.
