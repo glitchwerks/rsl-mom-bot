@@ -16,13 +16,14 @@ Usage::
 from __future__ import annotations
 
 import os
+from typing import Any
 
 from azure.identity import ManagedIdentityCredential
 from sqlalchemy import create_engine, event
-from sqlalchemy.engine import Engine
+from sqlalchemy.engine import Engine, make_url
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
 
-__all__ = ["Base", "build_session_factory"]
+__all__ = ["Base", "build_engine", "build_session_factory"]
 
 
 class Base(DeclarativeBase):
@@ -50,67 +51,49 @@ _OSSDB_AAD_SCOPE = "https://ossrdbms-aad.database.windows.net/.default"
 _POOL_RECYCLE_SECONDS = 4800
 
 
-def build_session_factory(
+def build_engine(
     db_url: str,
     *,
     aad_client_id: str | None = None,
-) -> sessionmaker[Session]:
-    """Build a session factory; for Postgres URLs, inject AAD token on connect.
+    authentication: str | None = None,
+    **engine_options: Any,
+) -> Engine:
+    """Create an engine with an explicitly selected PostgreSQL authentication path.
 
-    For Postgres URLs, an AAD access token (audience
-    ``https://ossrdbms-aad.database.windows.net/.default``) is acquired from
-    the configured user-assigned managed identity on every new physical
-    connection and stamped as the ``password`` connect parameter.
-
-    Token TTL observed in spike #101 is ~86 minutes (5147 s).
-    ``pool_recycle=4800`` (80 min) forces SQLAlchemy to close and recreate
-    physical connections before the token expires. QueuePool does not invoke
-    ``do_connect`` on every session checkout — only on new physical
-    connections — so ``pool_recycle`` is the primary guard.
-
-    ``pool_pre_ping=True`` issues a cheap ``SELECT 1`` on every checkout and
-    transparently reconnects if the connection is dead. This catches token
-    expiry, server failover, and network flaps — strictly more robust than
-    ``pool_recycle`` alone.
-
-    Connection-pool sizing: ``pool_size=5, max_overflow=5`` (10 connections
-    max). B1ms user-accessible ceiling is 35 connections. Deploy-window
-    worst-case: old revision pool (10) + new revision pool (10) + CI alembic
-    conn (1) + operator psql (1) = 22/35.
-
-    For non-Postgres URLs (sqlite, used in unit tests and local dev), the
-    hook is not registered and pool_recycle / pool_size are not set.
-
-    Args:
-        db_url: SQLAlchemy URL. ``postgresql+psycopg://...`` triggers
-            AAD-token injection and pool_recycle; anything else (notably
-            ``sqlite://``) is opened with no password injection.
-        aad_client_id: Client ID of the user-assigned managed identity to
-            use for token acquisition. Required when ``db_url`` is Postgres.
-            Defaults to ``$AZURE_CLIENT_ID`` when not provided.
-
-    Returns:
-        A sessionmaker bound to the configured engine.
-
-    Raises:
-        RuntimeError: If ``db_url`` is a Postgres URL and neither
-            ``aad_client_id`` is provided nor ``AZURE_CLIENT_ID`` is set.
+    MOM_BOT_DATABASE_AUTH defaults to azure_identity, preserving runtime behavior.
+    Password mode never constructs Azure credentials or installs a token hook.
+    No authentication failure triggers a fallback. SQLite remains available for tests.
     """
-    if db_url.startswith(("postgresql://", "postgresql+psycopg://")):
-        engine: Engine = create_engine(
-            db_url,
-            echo=False,
-            pool_recycle=_POOL_RECYCLE_SECONDS,
-            pool_pre_ping=True,
-            pool_size=5,
-            max_overflow=5,
-        )
-        client_id = aad_client_id or os.environ.get("AZURE_CLIENT_ID")
-        if not client_id:
+    mode = (
+        authentication
+        if authentication is not None
+        else os.environ.get("MOM_BOT_DATABASE_AUTH", "azure_identity")
+    )
+    if mode not in {"azure_identity", "password"}:
+        raise RuntimeError("MOM_BOT_DATABASE_AUTH must be azure_identity or password")
+    url = make_url(db_url)
+    postgres = url.get_backend_name() == "postgresql"
+    options: dict[str, Any] = {"echo": False, **engine_options}
+    client_id = aad_client_id or os.environ.get("AZURE_CLIENT_ID")
+    if postgres:
+        if mode == "azure_identity" and not client_id:
             raise RuntimeError(
-                "AZURE_CLIENT_ID must be set (or aad_client_id passed) "
-                "when MOM_BOT_DATABASE_URL is a Postgres URL."
+                "AZURE_CLIENT_ID must be set (or aad_client_id passed) for Azure PostgreSQL"
             )
+        if mode == "password" and (not url.username or not url.password):
+            raise RuntimeError("Password-authenticated PostgreSQL requires a username and password")
+        options.setdefault("pool_pre_ping", True)
+        if "poolclass" not in options:
+            # Two overlapping runtime revisions use at most 20 connections,
+            # leaving headroom below Azure B1ms's 35-connection ceiling.
+            options.setdefault("pool_size", 5)
+            options.setdefault("max_overflow", 5)
+        if mode == "azure_identity":
+            # Recycle physical connections before the observed 86-minute token
+            # TTL. A session checkout alone does not invoke the do_connect hook.
+            options.setdefault("pool_recycle", _POOL_RECYCLE_SECONDS)
+    engine = create_engine(db_url, **options)
+    if postgres and mode == "azure_identity":
         credential = ManagedIdentityCredential(client_id=client_id)
 
         @event.listens_for(engine, "do_connect")
@@ -120,7 +103,16 @@ def build_session_factory(
             token = credential.get_token(_OSSDB_AAD_SCOPE)
             cparams["password"] = token.token
 
-    else:
-        engine = create_engine(db_url, echo=False)
+    return engine
 
-    return sessionmaker(bind=engine)
+
+def build_session_factory(
+    db_url: str,
+    *,
+    aad_client_id: str | None = None,
+    authentication: str | None = None,
+) -> sessionmaker[Session]:
+    """Build runtime sessions using the shared explicit authentication selection."""
+    return sessionmaker(
+        bind=build_engine(db_url, aad_client_id=aad_client_id, authentication=authentication)
+    )

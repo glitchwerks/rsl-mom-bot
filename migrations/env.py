@@ -23,7 +23,7 @@ import mom_bot.new_member_alerts.models  # noqa: F401 — registers NewMemberAle
 import mom_bot.reminders.models  # noqa: F401 — registers Reminder + ReminderSent on Base.metadata
 import mom_bot.roles.models  # noqa: F401 — registers DayRoleMap on Base.metadata
 import mom_bot.sidecar.models  # noqa: F401 — registers MemberRoleSyncState on Base.metadata
-from mom_bot.db import Base  # noqa: E402 — must follow alembic context setup
+from mom_bot.db import Base, build_engine  # noqa: E402 — must follow alembic context setup
 
 # ---------------------------------------------------------------------------
 # Alembic Config object — provides access to values in alembic.ini.
@@ -98,11 +98,16 @@ def run_migrations_online() -> None:
     if env_url:
         section["sqlalchemy.url"] = env_url
 
-    connectable = engine_from_config(
-        section,
-        prefix="sqlalchemy.",
-        poolclass=pool.NullPool,
-    )
+    if os.environ.get("MOM_BOT_DATABASE_AUTH") is not None:
+        # New deployments share the runtime authentication selection. Unset
+        # preserves legacy jobs that already supply an externally acquired token.
+        connectable = build_engine(str(_get_url()), poolclass=pool.NullPool)
+    else:
+        connectable = engine_from_config(
+            section,
+            prefix="sqlalchemy.",
+            poolclass=pool.NullPool,
+        )
 
     with connectable.connect() as connection:
         context.configure(

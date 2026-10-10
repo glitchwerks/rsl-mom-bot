@@ -15,12 +15,17 @@ walks a 9-credential chain that times out 25 s on the IMDS endpoint before
 reaching ``az``, and the chain has shown to misroute under Key Vault's
 challenge-flow even when ``AzureCliCredential`` alone succeeds.
 
+Portable deployments explicitly select ``MOM_BOT_SECRET_SOURCE=environment``
+or ``files``; there is no fallback from Azure failures. Azure remains the default.
+
 Secret naming convention: ``<env>-<name>`` (e.g. ``dev-discord-token``).
 """
 
 from __future__ import annotations
 
 import os
+import re
+from pathlib import Path
 
 from azure.core.credentials import TokenCredential
 from azure.core.exceptions import ResourceNotFoundError
@@ -48,6 +53,9 @@ _KEY_VAULT_NAME: str = os.environ.get("MOM_BOT_KEY_VAULT_NAME", "kv-mombot-eastu
 
 # In-memory cache: maps fully-qualified secret name → value.
 _cache: dict[str, str] = {}
+_SECRET_SOURCE = os.environ.get("MOM_BOT_SECRET_SOURCE", "azure")
+if _SECRET_SOURCE not in {"azure", "environment", "files"}:
+    raise ValueError("MOM_BOT_SECRET_SOURCE must be azure, environment, or files")
 
 
 # ---------------------------------------------------------------------------
@@ -176,11 +184,13 @@ def _get_secret_client() -> SecretClient:
 
 
 def load_secret(name: str) -> str:
-    """Load a secret from Azure Key Vault, applying the env prefix.
+    """Load a secret from the explicitly selected source.
 
     The secret is fetched as ``<env>-<name>`` (e.g. ``dev-discord-token``
     when ``MOM_BOT_ENV=dev``).  Successful fetches are cached in-process so
-    repeated calls do not incur additional Key Vault round-trips.
+    repeated calls do not incur additional Key Vault round-trips. Portable
+    sources use MOM_BOT_SECRET_<NAME> variables or <env>-<name> files.
+    Missing portable secrets never fall back to Key Vault.
 
     Args:
         name: The unprefixed secret name (e.g. ``"discord-token"``).
@@ -189,13 +199,39 @@ def load_secret(name: str) -> str:
         The secret value string.
 
     Raises:
-        ConfigError: If the secret does not exist in Key Vault or the identity
-            lacks the required ``Key Vault Secrets User`` role.
+        ConfigError: If a required secret cannot be loaded from the selected source.
     """
     qualified_name = f"{_ENV}-{name}"
+    cache_key = f"{_SECRET_SOURCE}:{qualified_name}"
+    if cache_key in _cache:
+        return _cache[cache_key]
 
-    if qualified_name in _cache:
-        return _cache[qualified_name]
+    if _SECRET_SOURCE != "azure":
+        if not re.fullmatch(r"[a-z0-9]+(?:-[a-z0-9]+)*", name):
+            raise ConfigError(message="Invalid portable secret name")
+        if _SECRET_SOURCE == "environment":
+            variable = "MOM_BOT_SECRET_" + name.upper().replace("-", "_")
+            value = os.environ.get(variable, "")
+        else:
+            directory = os.environ.get("MOM_BOT_SECRET_DIR")
+            if not directory:
+                raise ConfigError(message="MOM_BOT_SECRET_DIR is required for file secrets")
+            try:
+                base = Path(directory).resolve(strict=True)
+                secret_file = (base / qualified_name).resolve(strict=True)
+                if not secret_file.is_relative_to(base):
+                    raise ConfigError(message="Secret file must remain inside its directory")
+                value = secret_file.read_text(encoding="utf-8").rstrip("\r\n")
+            except (OSError, UnicodeError):
+                raise ConfigError(
+                    message=f"Required portable secret {qualified_name!r} unavailable"
+                ) from None
+        if not value.strip():
+            raise ConfigError(
+                message=f"Required portable secret {qualified_name!r} missing or empty"
+            )
+        _cache[cache_key] = value
+        return value
 
     client = _get_secret_client()
     try:
@@ -203,6 +239,6 @@ def load_secret(name: str) -> str:
     except ResourceNotFoundError as exc:
         raise ConfigError(qualified_name) from exc
 
-    value: str = bundle.value  # type: ignore[assignment]
-    _cache[qualified_name] = value
+    value = bundle.value  # type: ignore[assignment]
+    _cache[cache_key] = value
     return value
