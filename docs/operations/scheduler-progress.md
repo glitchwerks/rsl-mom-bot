@@ -65,8 +65,8 @@ thresholds do not misclassify normal long-running cycles.
 
 ## Opt-in portable container probe
 
-`python -m mom_bot.health.check` exits zero only when localhost sidecar gateway
-health and private scheduler progress both qualify. It emits no output, ignores
+`/app/.venv/bin/python -m mom_bot.health.check` exits zero only when localhost
+sidecar gateway health and private scheduler progress both qualify. It emits no output, ignores
 ambient HTTP proxies, refuses redirects, limits response size and uses two-second
 request timeouts. Portable Compose applies a five-second outer healthcheck timeout.
 The module is never invoked by the unchanged Azure liveness definitions.
@@ -79,8 +79,10 @@ adds no watchdog or automatic restart policy.
 
 ## Release and recovery
 
-The additive operational endpoint requires mom-bot 1.6.0 (or an immutable candidate
-containing this change). A consumer requiring it must not point at an older image.
+The additive operational endpoint and probe require an immutable producer image
+containing this change, planned for mom-bot 1.6.0. Record its verified source/CI
+commit and registry digest; a version label alone is insufficient. A consumer
+requiring the probe must not point at an older portable-auth-only candidate.
 Deploy/release is independently gated. Roll back the candidate image and its
 matching optional consumer probe together if needed; Azure liveness remains
 unchanged. The progress state is intentionally process-local and resets on restart.
