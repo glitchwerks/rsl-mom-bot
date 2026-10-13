@@ -10,6 +10,7 @@ from collections.abc import Callable
 import discord
 from sqlalchemy.orm import Session
 
+from mom_bot.health import progress
 from mom_bot.member_activity.models import MemberActivity
 from mom_bot.member_activity.service import MemberActivityService
 
@@ -55,6 +56,14 @@ class AutoKickScheduler:
         self._tick_seconds = tick_seconds
 
     async def run(self) -> None:
+        """Track successful progress separately from task-loop liveness."""
+        progress.started("auto_kick")
+        try:
+            await self._run_loop()
+        finally:
+            progress.stopped("auto_kick")
+
+    async def _run_loop(self) -> None:
         """Run stale-member sweeps until the task is cancelled.
 
         A disconnected gateway skips the entire tick. Each stale member is
@@ -66,6 +75,7 @@ class AutoKickScheduler:
         """
         while True:
             if not self._bot.is_ready():
+                progress.failed("auto_kick")
                 await asyncio.sleep(self._tick_seconds)
                 continue
 
@@ -75,6 +85,7 @@ class AutoKickScheduler:
             except asyncio.CancelledError:
                 raise
             except Exception:
+                progress.failed("auto_kick")
                 _logger.exception("auto-kick: stale-member query failed")
                 await asyncio.sleep(self._tick_seconds)
                 continue
@@ -82,6 +93,7 @@ class AutoKickScheduler:
             for activity in stale_members:
                 await self._process_member(activity)
 
+            progress.succeeded("auto_kick")
             await asyncio.sleep(self._tick_seconds)
 
     async def _process_member(self, activity: MemberActivity) -> None:

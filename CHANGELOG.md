@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Private scheduler-progress health reports completed reminder and automatic member-sweep cycles, with immediate query/retry failure, stall and stopped-task detection; existing Azure liveness and sidecar contracts remain unchanged.
+
 - Explicit environment/file secret sources and PostgreSQL password authentication for portable deployments, preserving Azure defaults; selected database authentication is shared with migrations (#377).
 
 <!-- Add a "### 📣 Highlights" sub-section here before cutting the next release.
