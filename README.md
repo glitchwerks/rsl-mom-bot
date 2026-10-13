@@ -91,3 +91,6 @@ with siege-web are versioned and documented separately from application releases
 ## License
 
 Mom-bot is open-source software licensed under the [MIT License](LICENSE).
+
+Scheduler progress monitoring and independent Slack alert preparation are documented
+in [the scheduler progress runbook](docs/operations/scheduler-progress.md).

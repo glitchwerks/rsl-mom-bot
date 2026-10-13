@@ -67,6 +67,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 import mom_bot.health as health
+from mom_bot.health import progress
 from mom_bot.member_notifications.service import MemberNotificationService
 from mom_bot.reminders.calendar import (
     is_end_of_tank_date,
@@ -130,6 +131,14 @@ class ReminderScheduler:
         self._tick_seconds = tick_seconds
 
     async def run(self) -> None:
+        """Track successful progress separately from task-loop liveness."""
+        progress.started("reminders")
+        try:
+            await self._run_loop()
+        finally:
+            progress.stopped("reminders")
+
+    async def _run_loop(self) -> None:
         """Run the scheduler loop until the task is cancelled.
 
         Each iteration:
@@ -163,6 +172,7 @@ class ReminderScheduler:
 
             # Step 2 — per-tick readiness guard.
             if not self._bot.is_ready():
+                progress.failed("reminders")
                 _logger.debug("scheduler: bot not ready; skipping tick")
                 await asyncio.sleep(self._tick_seconds)
                 continue
@@ -174,10 +184,15 @@ class ReminderScheduler:
             today_date = now_utc.date()
 
             try:
-                await self._process_tick(today_weekday, now_time, today_date)
+                completed = await self._process_tick(today_weekday, now_time, today_date)
+                if completed:
+                    progress.succeeded("reminders")
+                else:
+                    progress.failed("reminders")
             except asyncio.CancelledError:
                 raise
             except Exception:
+                progress.failed("reminders")
                 # Transient per-tick errors (e.g. 5xx, RateLimited,
                 # aiohttp, timeout) are logged inside _handle_reminder and
                 # the row is already deleted for retry.  The loop continues
@@ -192,8 +207,8 @@ class ReminderScheduler:
         today_weekday: int,
         now_time: datetime.time,
         today_date: datetime.date,
-    ) -> None:
-        """Query and fire all eligible reminders for this tick.
+    ) -> bool:
+        """Query and fire all eligible reminders; return false on DM retry errors.
 
         Opens a fresh session for the tick, queries eligible reminders,
         and handles each one via :meth:`_handle_reminder`.
@@ -204,6 +219,7 @@ class ReminderScheduler:
                 ``fire_time_utc <= now_time`` predicate.
             today_date: UTC calendar date used for idempotency attribution.
         """
+        completed = True
         with self._session_factory() as session:
             # Step 1 — collect the full eligible set (weekday + time + not
             # sent today).  Calendar-conditional filtering happens below in
@@ -328,11 +344,14 @@ class ReminderScheduler:
                 try:
                     await self._handle_member_notification(notif, today_date)
                 except Exception:
+                    completed = False
                     _logger.exception(
                         "scheduler: DM loop: unhandled exception for "
                         "notification %r — continuing to next notification",
                         notif.name,
                     )
+
+        return completed
 
     async def _handle_reminder(
         self,

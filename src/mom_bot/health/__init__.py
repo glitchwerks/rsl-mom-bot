@@ -34,6 +34,8 @@ import time
 
 from aiohttp import web
 
+from mom_bot.health.progress import progress_handler
+
 __all__ = [
     "HEARTBEAT_THRESHOLD_SECONDS",
     "last_heartbeat",
@@ -139,6 +141,7 @@ async def start_health_server(
     """
     app = web.Application()
     app.router.add_get("/healthz", healthz_handler)
+    app.router.add_get("/healthz/progress", progress_handler)
 
     runner = web.AppRunner(app)
     await runner.setup()
