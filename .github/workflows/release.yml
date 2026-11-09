@@ -211,10 +211,18 @@ jobs:
           RELEASE_TAG: ${{ github.ref_name }}
         run: |
           set -euo pipefail
+          source_digest=$(docker buildx imagetools inspect \
+            "ghcr.io/glitchwerks/mom-bot:${GITHUB_SHA}" --format '{{.Manifest.Digest}}')
           docker buildx imagetools create \
+            --prefer-index=false \
             --tag "ghcr.io/glitchwerks/mom-bot:${RELEASE_TAG}" \
             "ghcr.io/glitchwerks/mom-bot:${GITHUB_SHA}"
-          docker buildx imagetools inspect "ghcr.io/glitchwerks/mom-bot:${RELEASE_TAG}" >/dev/null
+          release_digest=$(docker buildx imagetools inspect \
+            "ghcr.io/glitchwerks/mom-bot:${RELEASE_TAG}" --format '{{.Manifest.Digest}}')
+          if [[ "$source_digest" != "$release_digest" ]]; then
+            echo '::error::Version tag digest differs from the CI image.'
+            exit 1
+          fi
 
       - name: Create GitHub Release
         env:
