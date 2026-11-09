@@ -159,7 +159,7 @@ When in doubt, prefer the higher bump.
 
 ## Hotfix flow
 
-A hotfix is a patch release branched from a release tag rather than from `main`. Use this when `main` has unreleased breaking work that should not ship with the fix.
+A hotfix can be developed on a branch from a release tag when `main` has unreleased breaking work. The release tag itself must point to the tested merge commit on `main`, because the release workflow promotes the CI-approved `main` SHA image. If merging the hotfix into `main` would also ship incompatible work, first reconcile or revert that work in a reviewed PR; do not tag the untested hotfix branch.
 
 The hotfix version is the next patch bump from the tag you branched from — e.g. if you're hotfixing `v1.2.3`, the hotfix tag is `v1.2.4`. (Semver uses `.` as the bump separator; `+` is reserved for build metadata and is NOT how patch increments are spelled.)
 
@@ -174,13 +174,15 @@ git cherry-pick <fix-sha>
 # - Add a CHANGELOG entry under the new version
 # - Bump version in pyproject.toml
 # - Push the branch; open a PR targeting main (for the record and CI)
-# - After CI is green and smoke passes, tag from this branch
-
+# - Merge the PR into main; wait for main CI and its SHA image
+# - Smoke that exact image in the isolated pilot
+git checkout main
+git pull origin main
 git tag -a v1.2.4 -m "v1.2.4"
 git push origin v1.2.4
 ```
 
-After the hotfix tag is pushed, merge the hotfix branch into `main` so the fix is not lost in the next regular release. If the cherry-pick conflicts with ongoing work, resolve the conflict in the merge rather than skipping it.
+Keep the hotfix branch for the audit trail; the tagged source is the reviewed merge commit on `main`.
 
 ## RC and pre-release tags
 
