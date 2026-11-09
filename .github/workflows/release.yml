@@ -3,7 +3,7 @@ name: Release
 # Fires on any v* tag push (stable: v1.0.0, pre-release: v1.0.0-rc.1).
 # Publishes two artifacts:
 #   1. A GitHub Release with notes extracted from CHANGELOG.md.
-#   2. An immutable GHCR image at ghcr.io/glitchwerks/mom-bot:vX.Y.Z.
+#   2. A version tag for the CI-approved GHCR image at that source SHA.
 #
 # This workflow does NOT deploy to prod.  Deploy is a separate manual step
 # via workflow_dispatch on deploy.yml.  See RELEASING.md § "Deploy is separate".
@@ -143,7 +143,7 @@ jobs:
 
   # ---------------------------------------------------------------------------
   # Job 2 — release
-  # Builds the versioned GHCR image and creates the GitHub Release.
+  # Tags the CI-approved SHA image and creates the GitHub Release.
   # Only runs after verify succeeds.
   # ---------------------------------------------------------------------------
   release:
@@ -156,6 +156,8 @@ jobs:
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Extract CHANGELOG section
         id: changelog
@@ -191,16 +193,28 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Build and push versioned GHCR image
-        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc  # v7.4.0
-        with:
-          context: .
-          push: true
-          # Tag with the full v-prefixed tag (e.g. v1.0.0, v1.0.0-rc.1).
-          # Do NOT push :latest or touch :main — those are managed by build-image.yml.
-          tags: ghcr.io/glitchwerks/mom-bot:${{ github.ref_name }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+      - name: Verify CI image is on main
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin main
+          if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/main; then
+            echo '::error::Release commit is not on main; merge and pass CI first.'
+            exit 1
+          fi
+          if ! docker buildx imagetools inspect "ghcr.io/glitchwerks/mom-bot:${GITHUB_SHA}" >/dev/null; then
+            echo '::error::CI-approved SHA image is unavailable.'
+            exit 1
+          fi
+
+      - name: Promote exact CI image to version tag
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          docker buildx imagetools create \
+            --tag "ghcr.io/glitchwerks/mom-bot:${RELEASE_TAG}" \
+            "ghcr.io/glitchwerks/mom-bot:${GITHUB_SHA}"
+          docker buildx imagetools inspect "ghcr.io/glitchwerks/mom-bot:${RELEASE_TAG}" >/dev/null
 
       - name: Create GitHub Release
         env:
