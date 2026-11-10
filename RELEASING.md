@@ -4,9 +4,9 @@ Authoritative release process for the repo's `v*` tags. This document exists bec
 
 ## What a release does
 
-**A release = publishing artifacts. A release is NOT a deploy.**
+**A release publishes artifacts; it does not deploy production.**
 
-Pushing a `v*` tag triggers `.github/workflows/release.yml` (added in #215), which publishes two artifacts: a GitHub Release page and an immutable GHCR image tagged `:vX.Y.Z` at `ghcr.io/glitchwerks/mom-bot`. The mutable `:main` tag continues to track HEAD as before — the versioned tag is an additional pointer to the same SHA, not a replacement. Deploying the new image to the Azure Container App is a separate step, performed manually via `workflow_dispatch` on `.github/workflows/deploy.yml`. The tag-push does not trigger a deploy. You decide when prod gets the new image.
+CI on `main` publishes `ghcr.io/glitchwerks/mom-bot:<commit-sha>`. Pushing a `v*` tag triggers `.github/workflows/release.yml`, which verifies that the tagged commit is on `main` and that its CI image exists, then attaches the version tag to that exact image and publishes a GitHub Release. The retained Azure deployment workflow is disabled after the VPS cutover. Production remains pinned until the coordinated, separately approved VPS promotion in [rsl-mom-apps#25](https://github.com/glitchwerks/rsl-mom-apps/issues/25) is implemented and accepted.
 
 `release.yml` also posts the Discord announcement directly as a final `notify` job (after the GitHub Release is created). It does **not** rely on a separate `release: published`-triggered workflow — GitHub does not fire cross-workflow events from `GITHUB_TOKEN`-raised release events, so a separate trigger would never fire (#274). The notification is configured via the `DISCORD_RELEASE_WEBHOOK_URL` repo secret; if the secret is absent the notify job logs a warning and exits cleanly so the overall release is not blocked.
 
@@ -104,15 +104,9 @@ After the release PR squash-merges, `build-image.yml` builds and pushes the GHCR
 - The `build-image.yml` run for that SHA completed successfully
 - The image is reachable: `docker manifest inspect ghcr.io/glitchwerks/mom-bot:<merge-sha>`
 
-### 6. Manual prod smoke on the candidate image
+### 6. Isolated candidate smoke
 
-Before tagging, verify the candidate image works in prod:
-
-1. Dispatch `deploy.yml` with the merge commit SHA as `commit_sha`.
-2. Confirm slash commands respond (at minimum: `/ping` returns the new version string).
-3. Confirm day-role-sync is working (trigger a manual sync or verify the scheduled run completed cleanly).
-
-If smoke fails, do not tag. Fix the issue, merge a new commit, and restart from step 4.
+Before tagging, test the exact CI SHA image with an isolated Discord identity and the portable Compose configuration. Verify `/ping`, sidecar authentication, scheduler progress, and day-role sync in the test guild. Record the immutable digest and source SHA. Do not start a second gateway with the production token. If smoke fails, fix the issue, merge a new commit, and restart from step 4.
 
 ## Tag-push procedure
 
@@ -134,13 +128,13 @@ git push origin vX.Y.Z
 
 ### What to watch after pushing
 
-1. **`release.yml` workflow** — navigate to the Actions tab and confirm the `Release` run triggered on the new tag. It should publish the GitHub Release and push the `:vX.Y.Z` GHCR image. (The workflow is added in #215; its exact steps are defined in `.github/workflows/release.yml`.)
+1. **`release.yml` workflow** — confirm the run published the GitHub Release and attached `:vX.Y.Z` to the CI-approved SHA image.
 2. **GitHub Release page** — verify it appears at `https://github.com/glitchwerks/rsl-mom-bot/releases/tag/vX.Y.Z` with the correct release notes.
 3. **GHCR image** — confirm the versioned image is reachable: `docker manifest inspect ghcr.io/glitchwerks/mom-bot:vX.Y.Z`.
 
 ### Deploy is separate
 
-The tag does not deploy to prod. When you are ready to promote the new version, dispatch `deploy.yml` with the tagged SHA (or leave `commit_sha` blank to use the commit the tag points to). The deploy workflow verifies the image exists in GHCR, runs `alembic upgrade head`, and updates the Azure Container App.
+The tag does not deploy to production. The old Azure `deploy.yml` workflow is disabled; do not re-enable it for the VPS. The future guarded promotion must use a combined Siege/Mom release manifest, a fresh approval, verified backup and compatible migration gate, and post-promotion health evidence. Track that work in [Mom #387](https://github.com/glitchwerks/rsl-mom-bot/issues/387) and [coordination #25](https://github.com/glitchwerks/rsl-mom-apps/issues/25).
 
 ## Versioning policy
 
@@ -165,7 +159,7 @@ When in doubt, prefer the higher bump.
 
 ## Hotfix flow
 
-A hotfix is a patch release branched from a release tag rather than from `main`. Use this when `main` has unreleased breaking work that should not ship with the fix.
+A hotfix can be developed on a branch from a release tag when `main` has unreleased breaking work. The release tag itself must point to the tested merge commit on `main`, because the release workflow promotes the CI-approved `main` SHA image. If merging the hotfix into `main` would also ship incompatible work, first reconcile or revert that work in a reviewed PR; do not tag the untested hotfix branch.
 
 The hotfix version is the next patch bump from the tag you branched from — e.g. if you're hotfixing `v1.2.3`, the hotfix tag is `v1.2.4`. (Semver uses `.` as the bump separator; `+` is reserved for build metadata and is NOT how patch increments are spelled.)
 
@@ -180,13 +174,15 @@ git cherry-pick <fix-sha>
 # - Add a CHANGELOG entry under the new version
 # - Bump version in pyproject.toml
 # - Push the branch; open a PR targeting main (for the record and CI)
-# - After CI is green and smoke passes, tag from this branch
-
+# - Merge the PR into main; wait for main CI and its SHA image
+# - Smoke that exact image in the isolated pilot
+git checkout main
+git pull origin main
 git tag -a v1.2.4 -m "v1.2.4"
 git push origin v1.2.4
 ```
 
-After the hotfix tag is pushed, merge the hotfix branch into `main` so the fix is not lost in the next regular release. If the cherry-pick conflicts with ongoing work, resolve the conflict in the merge rather than skipping it.
+Keep the hotfix branch for the audit trail; the tagged source is the reviewed merge commit on `main`.
 
 ## RC and pre-release tags
 
