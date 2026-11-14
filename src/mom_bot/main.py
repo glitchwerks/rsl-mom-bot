@@ -57,6 +57,7 @@ from mom_bot.new_member_alerts.commands import register as _register_new_member_
 from mom_bot.new_member_alerts.service import NewMemberAlertService
 from mom_bot.post_conditions.client import SiegeWebClient
 from mom_bot.post_conditions.commands import register as _register_post_conditions
+from mom_bot.reminders.mention_audit import audit_reminder_mentions
 from mom_bot.reminders.scheduler import ReminderScheduler
 from mom_bot.reminders.seed import _maybe_seed_reminders
 from mom_bot.roles import run_preflight
@@ -282,6 +283,23 @@ SiegeWebClient` instance registered via :func:`make_client`; stored so
                     guild_id,
                 )
                 raise RuntimeError(f"Guild {guild_id} not found after bot READY")
+            # Observe current reminder-ping capability without editing guild
+            # permissions, schedules, or historical delivery records.
+            with factory() as session:
+                mention_audit = audit_reminder_mentions(session, live_guild)
+            level = (
+                logging.WARNING
+                if mention_audit["blocked"] or mention_audit["unknown"]
+                else logging.INFO
+            )
+            _logger.log(
+                level,
+                "Reminder role mention preflight: configured=%d ready=%d blocked=%d unknown=%d",
+                mention_audit["configured"],
+                mention_audit["ready"],
+                mention_audit["blocked"],
+                mention_audit["unknown"],
+            )
             scheduler = ReminderScheduler(self, factory, guild=live_guild)
             auto_kick_scheduler = AutoKickScheduler(self, live_guild, factory)
             self._auto_kick_task = asyncio.create_task(
