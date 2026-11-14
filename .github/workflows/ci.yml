@@ -119,7 +119,14 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
       - name: Build Docker image
-        run: docker build .
+        run: docker build --build-arg GIT_SHA=${{ github.sha }} --build-arg BUILD_NUMBER=42 --tag mom-ci-version .
+      - name: Verify image source metadata
+        run: |
+          docker run --rm --network none --read-only --cap-drop ALL \
+            --security-opt no-new-privileges \
+            -e EXPECTED_SOURCE_SHA=${{ github.sha }} -e EXPECTED_BUILD_NUMBER=42 \
+            --entrypoint /app/.venv/bin/python mom-ci-version \
+            -c 'import os; assert os.environ["GIT_SHA"] == os.environ["EXPECTED_SOURCE_SHA"]; assert os.environ["BUILD_NUMBER"] == os.environ["EXPECTED_BUILD_NUMBER"]'
 
   shellcheck:
     name: Shellcheck
