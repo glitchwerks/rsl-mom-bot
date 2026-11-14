@@ -5,6 +5,12 @@ RUN groupadd --system mombot && useradd --system --gid mombot mombot
 
 WORKDIR /app
 
+# CI-approved portable images carry the exact source/build identity returned by
+# /api/version. Local builds without args continue to report the package version.
+ARG GIT_SHA=""
+ARG BUILD_NUMBER=""
+ENV GIT_SHA=${GIT_SHA} BUILD_NUMBER=${BUILD_NUMBER}
+
 # Copy only the files needed for installation first (layer-cache friendly).
 # Alembic migrations and alembic.ini are included so the image can serve
 # as the Container Apps Job entrypoint for 'alembic upgrade head' (issue #255).
