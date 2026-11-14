@@ -311,6 +311,39 @@ async def test_setup_hook_builds_session_factory_once_and_stores_it() -> None:
 
 
 @pytest.mark.asyncio
+async def test_reminder_mention_audit_failure_does_not_stop_schedulers(caplog: Any) -> None:
+    """A read-only diagnostic failure cannot disable reminder or auto-kick work."""
+    from mom_bot.main import MomBot, build_intents
+
+    engine = _make_engine()
+    bot = MomBot(intents=build_intents())
+    guild, _ = _make_fake_guild()
+
+    async def short_run() -> None:
+        await asyncio.sleep(0.01)
+
+    with (
+        patch.object(bot, "wait_until_ready", new_callable=AsyncMock),
+        patch.object(bot, "get_guild", return_value=guild),
+        patch("mom_bot.main.load_secret", return_value=str(_GUILD_ID)),
+        patch("mom_bot.main._build_session_factory", return_value=_make_session_factory(engine)),
+        patch("mom_bot.main._maybe_seed_reminders"),
+        patch("mom_bot.main.audit_reminder_mentions", side_effect=RuntimeError("private failure")),
+        patch("mom_bot.main.ReminderScheduler") as reminder,
+        patch("mom_bot.main.AutoKickScheduler") as auto_kick,
+        caplog.at_level(logging.WARNING, logger="mom_bot.main"),
+    ):
+        reminder.return_value.run = AsyncMock(side_effect=short_run)
+        auto_kick.return_value.run = AsyncMock()
+        await bot._start_reminders_after_ready()
+        await asyncio.sleep(0)
+        reminder.return_value.run.assert_awaited_once()
+        auto_kick.return_value.run.assert_awaited_once()
+    assert "preflight unavailable; scheduler continues" in caplog.text
+    assert "private failure" not in caplog.text
+
+
+@pytest.mark.asyncio
 async def test_setup_hook_seeds_and_starts_scheduler() -> None:
     """setup_hook() must seed six reminder rows and start the scheduler task.
 

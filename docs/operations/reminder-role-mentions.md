@@ -10,14 +10,20 @@ controls assigning/removing roles; it is not a substitute for mention permission
 See [Discord's message rules](https://docs.discord.com/developers/resources/message#allowed-mentions-object)
 and [permission rules](https://docs.discord.com/developers/topics/permissions).
 
-At startup the bot reads the configured **channel** reminders and its connected
+At startup the bot reads the configured **channel** reminders that have a stored
+role ID and its connected
 guild cache, then logs one aggregate preflight line with `configured`, `ready`,
 `blocked`, and `unknown` counts. It does not log IDs, read message bodies, send a
 test message, edit permissions, update schedules, or change delivery history.
 The audit counts distinct channel/role pairs, so several reminders using one
 pair count once. `unknown` means the channel, role, or bot member was absent
 from the cache; inspect the guild and rerun before treating it as ready.
-The audit does not guarantee delivery: permissions may change after startup,
+The audit covers the scheduler's prefixed role mention only. It does not inspect
+`message_template` text or reminders with no stored role ID. Review those
+templates for `@everyone`, `@here`, or other mentions before granting
+`MENTION_EVERYONE`: `AllowedMentions(roles=True)` does not by itself suppress
+`@everyone` in template content. The audit does not guarantee delivery:
+permissions may change after startup,
 Discord may suppress push notifications, and member notification settings vary.
 
 For the current production finding under #386, first verify the six stored

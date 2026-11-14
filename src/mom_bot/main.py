@@ -285,21 +285,26 @@ SiegeWebClient` instance registered via :func:`make_client`; stored so
                 raise RuntimeError(f"Guild {guild_id} not found after bot READY")
             # Observe current reminder-ping capability without editing guild
             # permissions, schedules, or historical delivery records.
-            with factory() as session:
-                mention_audit = audit_reminder_mentions(session, live_guild)
-            level = (
-                logging.WARNING
-                if mention_audit["blocked"] or mention_audit["unknown"]
-                else logging.INFO
-            )
-            _logger.log(
-                level,
-                "Reminder role mention preflight: configured=%d ready=%d blocked=%d unknown=%d",
-                mention_audit["configured"],
-                mention_audit["ready"],
-                mention_audit["blocked"],
-                mention_audit["unknown"],
-            )
+            try:
+                with factory() as session:
+                    mention_audit = audit_reminder_mentions(session, live_guild)
+                level = (
+                    logging.WARNING
+                    if mention_audit["blocked"] or mention_audit["unknown"]
+                    else logging.INFO
+                )
+                _logger.log(
+                    level,
+                    "Reminder role mention preflight: configured=%d ready=%d blocked=%d unknown=%d",
+                    mention_audit["configured"],
+                    mention_audit["ready"],
+                    mention_audit["blocked"],
+                    mention_audit["unknown"],
+                )
+            except Exception:
+                # Diagnostics must not prevent either scheduler from starting.
+                # Cancellation inherits BaseException and still propagates.
+                _logger.warning("Reminder role mention preflight unavailable; scheduler continues")
             scheduler = ReminderScheduler(self, factory, guild=live_guild)
             auto_kick_scheduler = AutoKickScheduler(self, live_guild, factory)
             self._auto_kick_task = asyncio.create_task(
