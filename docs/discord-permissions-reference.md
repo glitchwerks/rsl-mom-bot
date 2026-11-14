@@ -35,7 +35,7 @@ Discord permissions are split across six distinct configuration surfaces. The sa
 | **`Create Events`** | **`1 << 44`** | **yes** | Autonomous tank-week creation; admin manual create; cancel of bot-created events |
 | `Manage Events` | `1 << 33` | **no (deliberate)** | Only required to edit/cancel events created by **human admins** in the Discord UI. v1.0 doesn't need this. See § Permissive variant |
 | `Read Message History` | `1 << 16` | no | mom-bot doesn't read history; slash commands deliver structured payloads |
-| `Mention Everyone` | `1 << 17` | maybe | Only if reminders use `@here` / `@everyone`. The plan uses **role mentions**, which require the role itself to be mentionable in role settings, not this bit |
+| `Mention Everyone` | `1 << 17` | conditional | A role mention notifies members when the role is mentionable **or** the bot has this effective permission in the destination channel. Granting it also allows `@everyone`, `@here`, and other unmentionable roles there; review that scope before granting it |
 | `Use Application Commands` | `1 << 31` | **N/A — wrong layer** | Member permission controlling who can invoke commands. Not a bot grant |
 
 **Combined integer for v1.0 (conservative):** `Send Messages | Embed Links | Attach Files | Manage Roles | Create Events` = `2048 + 16384 + 32768 + 268435456 + 17592186044416` = `17592454531072`.
@@ -64,7 +64,7 @@ After install/re-invite, the bot's role inherits the layer-2 bitfield. Verify in
 
 - [ ] mom-bot integration role exists in Server Settings → Roles
 - [ ] Each layer-2 permission is ticked on the role
-- [ ] Bot's role rank is above any role it might `@`-mention (matters for role mentions in reminders)
+- [ ] For reminder role notifications, either the target role is mentionable or the bot has effective `Mention Everyone` permission in each destination channel
 
 Admins can strip permissions at this layer at any time — the bot has no way to know until an API call returns 403. If reminders or events stop working post-deploy, layer 4 is the first thing to check.
 
@@ -86,7 +86,7 @@ For each **destination channel** mom-bot posts to:
 
 | Channel kind | Bot needs |
 |---|---|
-| Reminders channel | `Send Messages`, `Embed Links`, `Mention Everyone` (only if `@everyone` / `@here` used; not needed for `@role`) |
+| Reminders channel | `View Channel`, `Send Messages`, `Embed Links`; role notification also needs a mentionable role or effective `Mention Everyone` in this channel |
 | Image-post target channels (sidecar) | `Send Messages`, `Embed Links`, `Attach Files` |
 | Slash-command invocation channels | None bot-side — Discord routes interactions directly to the gateway |
 
