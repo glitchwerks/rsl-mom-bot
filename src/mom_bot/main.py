@@ -49,6 +49,8 @@ from mom_bot import __version__
 from mom_bot.config import load_secret
 from mom_bot.db import build_session_factory as _build_session_factory
 from mom_bot.health import start_health_server
+from mom_bot.maintenance import MaintenanceCommandTree, guarded_gateway
+from mom_bot.maintenance import gate as maintenance_gate
 from mom_bot.member_activity.scheduler import AutoKickScheduler
 from mom_bot.member_activity.service import MemberActivityService
 from mom_bot.member_notifications.commands import register as _register_member_notifications
@@ -157,7 +159,7 @@ SiegeWebClient` instance registered via :func:`make_client`; stored so
                 gateway.  Use :func:`build_intents` to build the locked spec.
         """
         super().__init__(intents=intents)
-        self.tree: app_commands.CommandTree = app_commands.CommandTree(self)
+        self.tree: app_commands.CommandTree = MaintenanceCommandTree(self)
         self.guild: discord.Object | None = None
         self._db_session_factory: sessionmaker[Session] | None = None
         self._reminder_task: asyncio.Task[None] | None = None
@@ -212,8 +214,10 @@ SiegeWebClient` instance registered via :func:`make_client`; stored so
         )
 
         self.tree.copy_global_to(guild=self.guild)
-        await self.tree.sync(guild=self.guild)
-        _logger.info("Synced slash commands to guild %s", guild_id)
+        with maintenance_gate.admitted() as allowed:
+            if allowed:
+                await self.tree.sync(guild=self.guild)
+                _logger.info("Synced slash commands to guild %s", guild_id)
 
         # Reminder init must happen AFTER gateway READY but cannot be
         # awaited here (would deadlock — see #41).  Spawn as a task and
@@ -271,8 +275,10 @@ SiegeWebClient` instance registered via :func:`make_client`; stored so
 
             # Seed the reminder table on first boot from Key Vault (plan § 4).
             # Pass self so seed.py can resolve the channel name → snowflake.
-            with factory() as session:
-                _maybe_seed_reminders(session, self)
+            with maintenance_gate.admitted() as allowed:
+                if allowed:
+                    with factory() as session:
+                        _maybe_seed_reminders(session, self)
 
             # Run the scheduler loop for the bot's lifetime (plan § 6).
             guild_id = int(load_secret("guild-id"))
@@ -380,8 +386,10 @@ SiegeWebClient` instance registered via :func:`make_client`; stored so
 
         # Seed day-role map — best-effort; failure is logged, not raised.
         try:
-            factory = _build_session_factory(_resolve_db_url())
-            await seed_day_role_map(self, factory)
+            with maintenance_gate.admitted() as allowed:
+                if allowed:
+                    factory = _build_session_factory(_resolve_db_url())
+                    await seed_day_role_map(self, factory)
         except Exception:
             _logger.exception(
                 "day_role_map seed failed; bot continues without updated "
@@ -419,6 +427,7 @@ SiegeWebClient` instance registered via :func:`make_client`; stored so
         if self._sidecar_task is None or self._sidecar_task.done():
             self._start_sidecar()
 
+    @guarded_gateway
     async def on_member_join(self, member: discord.Member) -> None:
         """Welcome a newly joined human member in the configured channel.
 
@@ -539,6 +548,7 @@ SiegeWebClient` instance registered via :func:`make_client`; stored so
             channel_id,
         )
 
+    @guarded_gateway
     async def on_message(self, message: discord.Message) -> None:
         """Record the first guild message from a tracked human member.
 

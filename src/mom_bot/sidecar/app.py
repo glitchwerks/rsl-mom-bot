@@ -145,6 +145,8 @@ from slowapi.wrappers import LimitGroup
 from sqlalchemy.orm import Session, sessionmaker
 
 from mom_bot import __version__ as _pkg_version
+from mom_bot.maintenance import MaintenancePauseMiddleware
+from mom_bot.maintenance import gate as maintenance_gate
 from mom_bot.roles.service import apply_day_role
 from mom_bot.sidecar.auth import make_bearer_dependency
 from mom_bot.sidecar.models import MemberRoleSyncState
@@ -463,6 +465,7 @@ def build_app(
     # ------------------------------------------------------------------
 
     app = FastAPI(title="mom-bot sidecar", docs_url=None, redoc_url=None)
+    app.add_middleware(MaintenancePauseMiddleware, gate=maintenance_gate)
     _sidecar_sub = FastAPI(docs_url=None, redoc_url=None)
     _role_sync_sub = FastAPI(docs_url=None, redoc_url=None)
 
@@ -764,6 +767,11 @@ def build_app(
             ``bot_connected`` (bool) reflecting ``bot.is_ready()`` right now.
         """
         return {"status": "healthy", "bot_connected": bot.is_ready()}
+
+    @_sidecar_sub.get("/api/maintenance/status", dependencies=[Depends(_require_bearer)])
+    async def maintenance_status() -> dict[str, bool | int]:
+        """Expose only the portable pause and in-flight drain counters."""
+        return maintenance_gate.snapshot()
 
     # ------------------------------------------------------------------
     # Sidecar sub-app: Member endpoints (Bearer-gated)
