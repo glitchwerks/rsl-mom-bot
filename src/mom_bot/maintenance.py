@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import os
 import stat
-from collections.abc import Iterator
+from collections.abc import Awaitable, Callable, Iterator
 from contextlib import contextmanager
 from functools import wraps
 from pathlib import Path
@@ -101,7 +101,7 @@ def _probe_allowed(scope: Scope) -> bool:
     if path != "/api/members":
         return False
     headers = dict(scope.get("headers", []))
-    return headers.get(b"authorization", b"").lower().startswith(b"bearer ")
+    return bool(headers.get(b"authorization", b"").lower().startswith(b"bearer "))
 
 
 class MaintenancePauseMiddleware:
@@ -143,11 +143,13 @@ class MaintenanceCommandTree(app_commands.CommandTree):
             await super()._call(interaction)
 
 
-def guarded_gateway(handler):
+def guarded_gateway[**P](
+    handler: Callable[P, Awaitable[None]],
+) -> Callable[P, Awaitable[None]]:
     """Count a gateway handler until its database and Discord work completes."""
 
     @wraps(handler)
-    async def wrapped(*args, **kwargs):
+    async def wrapped(*args: P.args, **kwargs: P.kwargs) -> None:
         with gate.admitted() as allowed:
             if allowed:
                 await handler(*args, **kwargs)
