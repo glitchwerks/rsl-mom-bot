@@ -298,6 +298,30 @@ class TestGetHealth:
 class TestBearerAuth:
     """Bearer auth dependency conformance: missing / wrong / correct token."""
 
+    def test_rotated_inbound_bearer_requires_app_recreation(self) -> None:
+        """A running sidecar keeps its key; a recreated app accepts only the new one."""
+        old_key = "synthetic-inbound-old"
+        new_key = "synthetic-inbound-new"
+        old_app = _make_client(api_key=old_key)
+        new_app = _make_client(api_key=new_key)
+
+        for client, accepted, rejected in (
+            (old_app, old_key, new_key),
+            (new_app, new_key, old_key),
+        ):
+            accepted_response = client.post(
+                "/api/internal/role-sync",
+                json={},
+                headers={"Authorization": f"Bearer {accepted}"},
+            )
+            assert accepted_response.status_code not in (401, 403)
+            rejected_response = client.post(
+                "/api/internal/role-sync",
+                json={},
+                headers={"Authorization": f"Bearer {rejected}"},
+            )
+            assert rejected_response.status_code == 401
+
     def test_missing_auth_header_returns_403(self) -> None:
         """A request to a protected endpoint with no Authorization header
         must return 403 per the executable contract.

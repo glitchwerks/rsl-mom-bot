@@ -33,6 +33,25 @@ def test_environment_secrets_do_not_contact_azure(monkeypatch: pytest.MonkeyPatc
         assert selected.load_secret("discord-token") == "synthetic-token"
 
 
+def test_portable_bearers_are_distinct_and_reload_only_in_a_new_process(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setenv("MOM_BOT_SECRET_DISCORD_BOT_API_KEY", "inbound-old")
+    monkeypatch.setenv("MOM_BOT_SECRET_SIEGE_WEB_BOT_TOKEN", "outbound-old")
+    running = portable_config(monkeypatch, "environment")
+    assert running.load_secret("discord-bot-api-key") == "inbound-old"
+    assert running.load_secret("siege-web-bot-token") == "outbound-old"
+
+    monkeypatch.setenv("MOM_BOT_SECRET_DISCORD_BOT_API_KEY", "inbound-new")
+    monkeypatch.setenv("MOM_BOT_SECRET_SIEGE_WEB_BOT_TOKEN", "outbound-new")
+    assert running.load_secret("discord-bot-api-key") == "inbound-old"
+    assert running.load_secret("siege-web-bot-token") == "outbound-old"
+
+    recreated = portable_config(monkeypatch, "environment")
+    assert recreated.load_secret("discord-bot-api-key") == "inbound-new"
+    assert recreated.load_secret("siege-web-bot-token") == "outbound-new"
+
+
 def test_missing_portable_secret_does_not_fall_back(monkeypatch: pytest.MonkeyPatch):
     selected = portable_config(monkeypatch, "environment")
     monkeypatch.delenv("MOM_BOT_SECRET_DISCORD_TOKEN", raising=False)

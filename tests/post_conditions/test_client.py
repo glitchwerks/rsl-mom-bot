@@ -156,6 +156,29 @@ def test_client_starts_with_no_session() -> None:
     assert client._session is None
 
 
+@pytest.mark.asyncio
+async def test_rotated_outbound_bearer_requires_client_recreation() -> None:
+    """Only a new client sends the replacement bearer to the protected API."""
+    old_token = "synthetic-outbound-old"
+    new_token = "synthetic-outbound-new"
+    old_client = SiegeWebClient(base_url=_BASE_URL, token=old_token)
+    new_client = SiegeWebClient(base_url=_BASE_URL, token=new_token)
+    old_session = _make_session(get_response=_make_response(200, _SAMPLE_PREFS))
+    new_session = _make_session(get_response=_make_response(200, _SAMPLE_PREFS))
+    _inject_session(old_client, old_session)
+    _inject_session(new_client, new_session)
+
+    await old_client.get_my_preferences(
+        discord_id=_DISCORD_ID, discord_username=_DISCORD_USERNAME
+    )
+    await new_client.get_my_preferences(
+        discord_id=_DISCORD_ID, discord_username=_DISCORD_USERNAME
+    )
+
+    assert old_session.get.call_args.kwargs["headers"]["Authorization"] == f"Bearer {old_token}"
+    assert new_session.get.call_args.kwargs["headers"]["Authorization"] == f"Bearer {new_token}"
+
+
 # ---------------------------------------------------------------------------
 # Session reuse
 # ---------------------------------------------------------------------------
