@@ -37,6 +37,7 @@ import datetime
 import logging
 import os
 import time
+from collections.abc import Awaitable, Callable
 from typing import cast
 
 import discord
@@ -168,6 +169,7 @@ SiegeWebClient` instance registered via :func:`make_client`; stored so
         self._siege_client: SiegeWebClient | None = None
         self._sidecar_task: asyncio.Task[None] | None = None
         self._sidecar_server: uvicorn.Server | None = None
+        self._deferred_startup_tasks: set[asyncio.Task[None]] = set()
         # Once-guard: preflight runs once per process lifetime even if Discord
         # re-emits on_ready on reconnect (plan #76 AC #3).
         self._preflight_done: bool = False
@@ -218,6 +220,13 @@ SiegeWebClient` instance registered via :func:`make_client`; stored so
             if allowed:
                 await self.tree.sync(guild=self.guild)
                 _logger.info("Synced slash commands to guild %s", guild_id)
+            else:
+
+                async def sync_after_resume() -> None:
+                    await self.tree.sync(guild=self.guild)
+                    _logger.info("Synced slash commands to guild %s after resume", guild_id)
+
+                self._defer_startup("command-sync", sync_after_resume)
 
         # Reminder init must happen AFTER gateway READY but cannot be
         # awaited here (would deadlock — see #41).  Spawn as a task and
@@ -279,6 +288,13 @@ SiegeWebClient` instance registered via :func:`make_client`; stored so
                 if allowed:
                     with factory() as session:
                         _maybe_seed_reminders(session, self)
+                else:
+
+                    async def seed_after_resume() -> None:
+                        with factory() as session:
+                            _maybe_seed_reminders(session, self)
+
+                    self._defer_startup("reminder-seed", seed_after_resume)
 
             # Run the scheduler loop for the bot's lifetime (plan § 6).
             guild_id = int(load_secret("guild-id"))
@@ -390,6 +406,13 @@ SiegeWebClient` instance registered via :func:`make_client`; stored so
                 if allowed:
                     factory = _build_session_factory(_resolve_db_url())
                     await seed_day_role_map(self, factory)
+                else:
+
+                    async def role_seed_after_resume() -> None:
+                        factory = _build_session_factory(_resolve_db_url())
+                        await seed_day_role_map(self, factory)
+
+                    self._defer_startup("day-role-seed", role_seed_after_resume)
         except Exception:
             _logger.exception(
                 "day_role_map seed failed; bot continues without updated "
@@ -575,6 +598,29 @@ SiegeWebClient` instance registered via :func:`make_client`; stored so
             message_at,
         )
 
+    def _defer_startup(self, name: str, operation: Callable[[], Awaitable[None]]) -> None:
+        """Retry a startup action skipped by the portable pause after resume."""
+
+        async def retry() -> None:
+            while True:
+                await asyncio.sleep(5)
+                with maintenance_gate.admitted() as allowed:
+                    if not allowed:
+                        continue
+                    try:
+                        await operation()
+                    except asyncio.CancelledError:
+                        raise
+                    except Exception:
+                        _logger.exception("Deferred %s failed; retrying", name)
+                        continue
+                    return
+
+        task = asyncio.create_task(retry(), name=f"maintenance-{name}")
+        self._deferred_startup_tasks.add(task)
+        task.add_done_callback(self._deferred_startup_tasks.discard)
+        task.add_done_callback(_log_task_exception)
+
     def _start_sidecar(self) -> None:
         """Build the FastAPI sidecar and start it under uvicorn on port 8001.
 
@@ -653,6 +699,11 @@ SiegeWebClient` instance registered via :func:`make_client`; stored so
         ensures the sidecar has a chance to flush in-flight requests before
         the process exits.
         """
+        for task in tuple(self._deferred_startup_tasks):
+            task.cancel()
+        if self._deferred_startup_tasks:
+            await asyncio.gather(*self._deferred_startup_tasks, return_exceptions=True)
+
         # Drain the sidecar server before closing the gateway.
         if self._sidecar_server is not None:
             self._sidecar_server.should_exit = True

@@ -11,6 +11,7 @@ from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
 
 from mom_bot.health import progress
+from mom_bot.main import MomBot
 from mom_bot.maintenance import MaintenanceGate, MaintenancePauseMiddleware
 from mom_bot.member_activity.scheduler import AutoKickScheduler
 from mom_bot.reminders.scheduler import ReminderScheduler
@@ -134,6 +135,29 @@ async def test_uncertain_auto_kick_does_not_dm_or_remove_tracking():
         await AutoKickScheduler._process_member_unchecked(scheduler, activity)
     scheduler._guild.get_member.assert_not_called()
     scheduler._service.remove_tracking.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_deferred_startup_retries_only_after_resume():
+    bot = MagicMock()
+    bot._deferred_startup_tasks = set()
+    operation = AsyncMock(side_effect=[RuntimeError("transient"), None])
+    real_sleep = asyncio.sleep
+
+    async def fast_sleep(_seconds):
+        await real_sleep(0)
+
+    with (
+        patch("mom_bot.main.maintenance_gate.begin", side_effect=[False, False, True, True]),
+        patch("mom_bot.main.maintenance_gate.end"),
+        patch("mom_bot.main.asyncio.sleep", side_effect=fast_sleep),
+    ):
+        MomBot._defer_startup(bot, "probe", operation)
+        task = next(iter(bot._deferred_startup_tasks))
+        await asyncio.wait_for(task, timeout=2)
+
+    assert operation.await_count == 2
+    assert len(bot._deferred_startup_tasks) == 0
 
 
 @pytest.mark.asyncio

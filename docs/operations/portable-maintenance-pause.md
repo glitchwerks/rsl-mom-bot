@@ -9,6 +9,8 @@ While paused, Mom rejects sidecar writes, slash commands, gateway handlers,
 reminder sends, and auto-kick work. Its authenticated maintenance status probe
 reports the paused state and current in-flight count for the host drain. Health
 reports an intentional scheduler pause without claiming a send occurred.
+If a container starts while paused, skipped slash-command sync and startup
+seeds are retried under admission after resume; transient failures retry.
 
 `control/history.json` records the most recent pause and resume boundaries.
 After a resume, auto-kick holds any member whose join predates the active state
