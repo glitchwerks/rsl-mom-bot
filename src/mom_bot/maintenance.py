@@ -7,10 +7,12 @@ or malformed state fails closed, including after container recreation.
 
 from __future__ import annotations
 
+import json
 import os
 import stat
 from collections.abc import Awaitable, Callable, Iterator
 from contextlib import contextmanager
+from datetime import UTC, datetime
 from functools import wraps
 from pathlib import Path
 from threading import Lock
@@ -53,6 +55,59 @@ class MaintenanceGate:
                 return "active" if source.read(17) == b"active\n" else "paused"
         except OSError:
             return "paused"
+
+    def uncertain_member_activity(self, joined_at: datetime) -> bool:
+        """Hold auto-kicks whose first-message record may have a gateway gap."""
+        if not self.enabled:
+            return False
+        path = self.state_file
+        if path is None or self.state() != "active":
+            return True
+        history_path = path.with_name("history.json")
+        try:
+            if any(part.is_symlink() for part in (history_path, *history_path.parents)):
+                return True
+            fd = os.open(history_path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+            with os.fdopen(fd, "rb") as source:
+                info = os.fstat(source.fileno())
+                if (
+                    not stat.S_ISREG(info.st_mode)
+                    or info.st_uid != self.owner_uid
+                    or info.st_mode & 0o022
+                    or info.st_size > 256
+                ):
+                    return True
+                history = json.load(source)
+            if (
+                not isinstance(history, dict)
+                or set(history) != {"schema", "pause_started_at", "last_resumed_at"}
+                or history["schema"] != 1
+            ):
+                return True
+            if history["pause_started_at"] is None:
+                return history["last_resumed_at"] is not None
+            if not isinstance(history["pause_started_at"], str):
+                return True
+            started = datetime.fromisoformat(history["pause_started_at"])
+            if started.tzinfo != UTC:
+                return True
+            resumed_raw = history["last_resumed_at"]
+            if resumed_raw is None:
+                return True
+            if not isinstance(resumed_raw, str):
+                return True
+            resumed = datetime.fromisoformat(resumed_raw)
+            if resumed.tzinfo != UTC:
+                return True
+            active_since = datetime.fromtimestamp(path.stat().st_mtime, UTC)
+            joined = (
+                joined_at.replace(tzinfo=UTC)
+                if joined_at.tzinfo is None
+                else joined_at.astimezone(UTC)
+            )
+            return joined <= max(resumed, active_since)
+        except (OSError, ValueError, TypeError):
+            return True
 
     def begin(self) -> bool:
         if self.state() != "active":

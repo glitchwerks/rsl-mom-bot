@@ -112,6 +112,14 @@ class AutoKickScheduler:
         Raises:
             asyncio.CancelledError: Propagated when the task is cancelled.
         """
+        if maintenance_gate.uncertain_member_activity(activity.joined_at):
+            _logger.warning(
+                "auto-kick: holding member %d in guild %d for activity review after maintenance",
+                activity.member_id,
+                activity.guild_id,
+            )
+            return
+
         member = self._guild.get_member(activity.member_id)
         if member is None:
             try:

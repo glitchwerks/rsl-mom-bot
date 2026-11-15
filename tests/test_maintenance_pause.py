@@ -2,6 +2,7 @@
 
 import asyncio
 import datetime
+import json
 import os
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -85,6 +86,54 @@ def test_missing_invalid_or_restarted_state_fails_closed(gate, tmp_path):
     target.write_bytes(b"active\n")
     gate.state_file.symlink_to(target)
     assert gate.state() == "paused"
+
+
+def test_auto_kick_holds_uncertain_rows_after_resume(gate):
+    history = gate.state_file.with_name("history.json")
+    history.write_text(
+        json.dumps(
+            {
+                "schema": 1,
+                "pause_started_at": None,
+                "last_resumed_at": None,
+            }
+        )
+    )
+    history.chmod(0o644)
+    before = datetime.datetime.now(datetime.UTC) - datetime.timedelta(days=2)
+    assert gate.uncertain_member_activity(before) is False
+
+    resumed = datetime.datetime.now(datetime.UTC)
+    history.write_text(
+        json.dumps(
+            {
+                "schema": 1,
+                "pause_started_at": (resumed - datetime.timedelta(minutes=2)).isoformat(),
+                "last_resumed_at": resumed.isoformat(),
+            }
+        )
+    )
+    assert gate.uncertain_member_activity(before) is True
+    after = resumed + datetime.timedelta(days=1)
+    assert gate.uncertain_member_activity(after) is False
+    history.write_text("invalid")
+    assert gate.uncertain_member_activity(after) is True
+
+
+@pytest.mark.asyncio
+async def test_uncertain_auto_kick_does_not_dm_or_remove_tracking():
+    activity = MagicMock()
+    activity.joined_at = datetime.datetime.now(datetime.UTC)
+    activity.member_id = 42
+    activity.guild_id = 17
+    scheduler = MagicMock()
+    with patch(
+        "mom_bot.member_activity.scheduler.maintenance_gate.uncertain_member_activity",
+        return_value=True,
+    ):
+        await AutoKickScheduler._process_member_unchecked(scheduler, activity)
+    scheduler._guild.get_member.assert_not_called()
+    scheduler._service.remove_tracking.assert_not_called()
 
 
 @pytest.mark.asyncio
