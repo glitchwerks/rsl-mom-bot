@@ -141,6 +141,33 @@ def test_rejoin_resets_first_message_at() -> None:
     assert row.first_message_at is None
 
 
+def test_claim_join_skips_duplicate_and_claims_later_rejoin() -> None:
+    engine = _make_engine()
+    service = _make_service(engine)
+    assert service.claim_join(_GUILD_ID, _MEMBER_ID, _JOINED_AT) is True
+    service.record_first_message(_GUILD_ID, _MEMBER_ID, _JOINED_AT + datetime.timedelta(hours=1))
+    assert service.claim_join(_GUILD_ID, _MEMBER_ID, _JOINED_AT) is False
+    tracked = service.get_tracking(_GUILD_ID, _MEMBER_ID)
+    assert tracked is not None and tracked.first_message_at is not None
+    later = _JOINED_AT + datetime.timedelta(days=2)
+    assert service.claim_join(_GUILD_ID, _MEMBER_ID, later) is True
+    tracked = service.get_tracking(_GUILD_ID, _MEMBER_ID)
+    assert tracked is not None and tracked.joined_at == later
+    assert tracked.first_message_at is None
+    service.remove_tracking(_GUILD_ID, _MEMBER_ID)
+    assert service.has_join_claim(_GUILD_ID, _MEMBER_ID, later) is True
+    assert service.claim_join(_GUILD_ID, _MEMBER_ID, later) is False
+
+
+def test_claim_join_recognizes_legacy_join_recorded_at_receipt_time() -> None:
+    engine = _make_engine()
+    service = _make_service(engine)
+    received = _JOINED_AT + datetime.timedelta(seconds=2)
+    service.record_join(_GUILD_ID, _MEMBER_ID, received)
+    assert service.claim_join(_GUILD_ID, _MEMBER_ID, _JOINED_AT) is False
+    assert service.has_join_claim(_GUILD_ID, _MEMBER_ID, _JOINED_AT) is True
+
+
 # ---------------------------------------------------------------------------
 # record_first_message
 # ---------------------------------------------------------------------------

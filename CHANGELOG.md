@@ -11,7 +11,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Opt-in portable maintenance admission for sidecar requests, slash commands,
   gateway handlers, and scheduler work, with a protected shared control file
-  and authenticated in-flight status for paired bearer rotation (#395).
+  and authenticated in-flight status for paired bearer rotation. Resume scans
+  current guild joins using durable claims and holds auto-kicks when first
+  messages may have been missed (#395).
 
 - Private scheduler-progress health reports completed reminder and automatic member-sweep cycles, with immediate query/retry failure, stall and stopped-task detection; existing Azure liveness and sidecar contracts remain unchanged.
 

@@ -56,17 +56,15 @@ class MaintenanceGate:
         except OSError:
             return "paused"
 
-    def uncertain_member_activity(self, joined_at: datetime) -> bool:
-        """Hold auto-kicks whose first-message record may have a gateway gap."""
-        if not self.enabled:
-            return False
+    def _pause_history(self) -> tuple[datetime | None, datetime | None] | None:
+        """Read trusted UTC boundaries; None means missing or malformed history."""
         path = self.state_file
-        if path is None or self.state() != "active":
-            return True
+        if path is None or not path.is_absolute():
+            return None
         history_path = path.with_name("history.json")
         try:
             if any(part.is_symlink() for part in (history_path, *history_path.parents)):
-                return True
+                return None
             fd = os.open(history_path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
             with os.fdopen(fd, "rb") as source:
                 info = os.fstat(source.fileno())
@@ -76,38 +74,62 @@ class MaintenanceGate:
                     or info.st_mode & 0o022
                     or info.st_size > 256
                 ):
-                    return True
+                    return None
                 history = json.load(source)
             if (
                 not isinstance(history, dict)
                 or set(history) != {"schema", "pause_started_at", "last_resumed_at"}
                 or history["schema"] != 1
             ):
-                return True
-            if history["pause_started_at"] is None:
-                return history["last_resumed_at"] is not None
-            if not isinstance(history["pause_started_at"], str):
-                return True
-            started = datetime.fromisoformat(history["pause_started_at"])
-            if started.tzinfo != UTC:
-                return True
-            resumed_raw = history["last_resumed_at"]
-            if resumed_raw is None:
-                return True
-            if not isinstance(resumed_raw, str):
-                return True
-            resumed = datetime.fromisoformat(resumed_raw)
-            if resumed.tzinfo != UTC:
-                return True
-            active_since = datetime.fromtimestamp(path.stat().st_mtime, UTC)
-            joined = (
-                joined_at.replace(tzinfo=UTC)
-                if joined_at.tzinfo is None
-                else joined_at.astimezone(UTC)
-            )
-            return joined <= max(resumed, active_since)
+                return None
+            values: list[datetime | None] = []
+            for field in ("pause_started_at", "last_resumed_at"):
+                raw = history[field]
+                if raw is None:
+                    values.append(None)
+                    continue
+                if not isinstance(raw, str):
+                    return None
+                parsed = datetime.fromisoformat(raw)
+                if parsed.tzinfo != UTC:
+                    return None
+                values.append(parsed)
+            started, resumed = values
+            if started is None and resumed is not None:
+                return None
+            return started, resumed
         except (OSError, ValueError, TypeError):
+            return None
+
+    def reconciliation_window(self) -> tuple[datetime, datetime] | None:
+        """Return the durable pause interval only while admission is open."""
+        if not self.enabled or self.state() != "active" or self.state_file is None:
+            return None
+        history = self._pause_history()
+        if history is None or history[0] is None or history[1] is None:
+            return None
+        try:
+            active_since = datetime.fromtimestamp(self.state_file.stat().st_mtime, UTC)
+        except OSError:
+            return None
+        return history[0], max(history[1], active_since)
+
+    def uncertain_member_activity(self, joined_at: datetime) -> bool:
+        """Hold auto-kicks whose first-message record may have a gateway gap."""
+        if not self.enabled:
+            return False
+        if self.state() != "active":
             return True
+        history = self._pause_history()
+        if history == (None, None):
+            return False
+        window = self.reconciliation_window()
+        if window is None:
+            return True
+        joined = (
+            joined_at.replace(tzinfo=UTC) if joined_at.tzinfo is None else joined_at.astimezone(UTC)
+        )
+        return joined <= window[1]
 
     def begin(self) -> bool:
         if self.state() != "active":

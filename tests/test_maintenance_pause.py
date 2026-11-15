@@ -114,6 +114,8 @@ def test_auto_kick_holds_uncertain_rows_after_resume(gate):
             }
         )
     )
+    window = gate.reconciliation_window()
+    assert window is not None and window[0] == resumed - datetime.timedelta(minutes=2)
     assert gate.uncertain_member_activity(before) is True
     after = resumed + datetime.timedelta(days=1)
     assert gate.uncertain_member_activity(after) is False

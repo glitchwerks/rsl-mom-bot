@@ -170,6 +170,8 @@ SiegeWebClient` instance registered via :func:`make_client`; stored so
         self._sidecar_task: asyncio.Task[None] | None = None
         self._sidecar_server: uvicorn.Server | None = None
         self._deferred_startup_tasks: set[asyncio.Task[None]] = set()
+        self._join_lock = asyncio.Lock()
+        self._maintenance_reconcile_task: asyncio.Task[None] | None = None
         # Once-guard: preflight runs once per process lifetime even if Discord
         # re-emits on_ready on reconnect (plan #76 AC #3).
         self._preflight_done: bool = False
@@ -449,6 +451,13 @@ SiegeWebClient` instance registered via :func:`make_client`; stored so
         # is already running (reconnect scenario), leave it untouched.
         if self._sidecar_task is None or self._sidecar_task.done():
             self._start_sidecar()
+        if maintenance_gate.enabled and (
+            self._maintenance_reconcile_task is None or self._maintenance_reconcile_task.done()
+        ):
+            self._maintenance_reconcile_task = asyncio.create_task(
+                self._reconcile_joins_after_resume(), name="maintenance-join-reconcile"
+            )
+            self._maintenance_reconcile_task.add_done_callback(_log_task_exception)
 
     @guarded_gateway
     async def on_member_join(self, member: discord.Member) -> None:
@@ -457,25 +466,45 @@ SiegeWebClient` instance registered via :func:`make_client`; stored so
         Args:
             member: The guild member whose join event Discord dispatched.
         """
+        async with self._join_lock:
+            await self._handle_member_join(member)
+
+    async def _handle_member_join(self, member: discord.Member) -> None:
+        """Claim one join before any welcome or officer notification."""
         if member.bot:
             return
 
         if self.guild is None or member.guild.id != self.guild.id:
             return
 
-        try:
-            factory = self._db_session_factory
-            if factory is None:
-                raise RuntimeError("Database session factory is not initialized")
+        factory = self._db_session_factory
+        if factory is not None:
+            joined_at = member.joined_at
+            if (
+                not isinstance(joined_at, datetime.datetime)
+                or joined_at.tzinfo is None
+                or joined_at.utcoffset() is None
+            ):
+                _logger.warning(
+                    "Cannot claim join without Discord timestamp for member %d", member.id
+                )
+                return
             activity_service = MemberActivityService(factory)
-            joined_at = datetime.datetime.now(datetime.UTC).replace(tzinfo=None)
-            activity_service.record_join(member.guild.id, member.id, joined_at)
-        except Exception:
-            _logger.exception(
-                "Failed to record join activity for member %d in guild %d",
-                member.id,
-                member.guild.id,
-            )
+            try:
+                claimed = activity_service.claim_join(
+                    member.guild.id,
+                    member.id,
+                    joined_at.astimezone(datetime.UTC).replace(tzinfo=None),
+                )
+            except Exception:
+                _logger.exception(
+                    "Failed to claim join activity for member %d in guild %d",
+                    member.id,
+                    member.guild.id,
+                )
+                return
+            if not claimed:
+                return
 
         await self._send_welcome_message(member)
 
@@ -507,6 +536,62 @@ SiegeWebClient` instance registered via :func:`make_client`; stored so
                     user_id,
                     exc_info=True,
                 )
+
+    async def _reconcile_joins_after_resume(self) -> None:
+        """Replay current guild joins from a durable pause window once per resume."""
+        completed: tuple[datetime.datetime, datetime.datetime] | None = None
+        while True:
+            await asyncio.sleep(30)
+            window = maintenance_gate.reconciliation_window()
+            if window is None or window == completed or self.guild is None:
+                continue
+            guild = self.get_guild(self.guild.id)
+            if guild is None or not self.is_ready():
+                continue
+            try:
+                if await self._reconcile_joins_once(guild, window):
+                    completed = window
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                _logger.exception("Maintenance join reconciliation failed; retrying")
+
+    async def _reconcile_joins_once(
+        self, guild: discord.Guild, window: tuple[datetime.datetime, datetime.datetime]
+    ) -> bool:
+        """Scan current members, replay eligible joins, and retry on interruption."""
+        examined = 0
+        eligible = 0
+        for_start, through = window
+        async for member in guild.fetch_members(limit=None):
+            examined += 1
+            joined_at = member.joined_at
+            if (
+                member.bot
+                or not isinstance(joined_at, datetime.datetime)
+                or joined_at.tzinfo is None
+                or joined_at.utcoffset() is None
+            ):
+                continue
+            joined = joined_at.astimezone(datetime.UTC)
+            if for_start <= joined <= through:
+                eligible += 1
+                await self.on_member_join(member)
+                factory = self._db_session_factory
+                if factory is None:
+                    raise RuntimeError("Join reconciliation has no database session factory")
+                if not MemberActivityService(factory).has_join_claim(
+                    guild.id, member.id, joined.replace(tzinfo=None)
+                ):
+                    raise RuntimeError("Join reconciliation did not record an eligible join")
+        if maintenance_gate.reconciliation_window() != window:
+            return False
+        _logger.info(
+            "Maintenance join reconciliation complete: examined=%d eligible=%d",
+            examined,
+            eligible,
+        )
+        return True
 
     async def _send_welcome_message(self, member: discord.Member) -> None:
         """Send the configured welcome message to a newly joined member.
@@ -703,6 +788,9 @@ SiegeWebClient` instance registered via :func:`make_client`; stored so
             task.cancel()
         if self._deferred_startup_tasks:
             await asyncio.gather(*self._deferred_startup_tasks, return_exceptions=True)
+        if self._maintenance_reconcile_task is not None:
+            self._maintenance_reconcile_task.cancel()
+            await asyncio.gather(self._maintenance_reconcile_task, return_exceptions=True)
 
         # Drain the sidecar server before closing the gateway.
         if self._sidecar_server is not None:
