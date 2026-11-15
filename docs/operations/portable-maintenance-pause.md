@@ -6,7 +6,8 @@ fail closed. The host runner in Siege #640 owns pause and resume transitions;
 this repository does not authorize a live transition.
 
 While paused, Mom rejects sidecar writes, slash commands, gateway handlers,
-reminder sends, and auto-kick work. Its authenticated maintenance status probe
+the post-condition Save button on already-open views, reminder sends, and
+auto-kick work. Its authenticated maintenance status probe
 reports the paused state and current in-flight count for the host drain. Health
 reports an intentional scheduler pause without claiming a send occurred.
 If a container starts while paused, skipped slash-command sync and startup
