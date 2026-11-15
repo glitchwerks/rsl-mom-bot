@@ -452,3 +452,20 @@ class TestBearerAuth:
         )
         assert response.status_code == 401
         assert "Bearer" in response.headers.get("www-authenticate", "")
+
+
+def test_maintenance_status_uses_existing_bearer_boundary() -> None:
+    """Only the sidecar service bearer can read pause/drain counters."""
+    client = _make_client()
+    assert client.get("/api/maintenance/status").status_code == 403
+    assert (
+        client.get(
+            "/api/maintenance/status", headers={"Authorization": "Bearer wrong-key"}
+        ).status_code
+        == 401
+    )
+    response = client.get(
+        "/api/maintenance/status", headers={"Authorization": f"Bearer {_VALID_KEY}"}
+    )
+    assert response.status_code == 200
+    assert response.json() == {"paused": False, "inflight": 0}
