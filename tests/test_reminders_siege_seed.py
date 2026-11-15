@@ -277,14 +277,14 @@ class TestSiegeSeedRowsMigration:
     _EXPECTED_REVISION = "0007_siege_seed_rows"
     _EXPECTED_PARENT = "0006_siege_month_conditions"
 
-    def test_alembic_heads_is_0007_siege_seed_rows(self) -> None:
-        """The sole alembic head is 0007_siege_seed_rows once it lands."""
+    def test_alembic_chain_retains_0007_siege_seed_rows(self) -> None:
+        """The sole alembic chain still includes the Siege seed migration."""
         cfg = Config(_ALEMBIC_INI)
         script = ScriptDirectory.from_config(cfg)
         heads = script.get_heads()
-        assert heads == [self._EXPECTED_REVISION], (
-            f"Expected exactly one alembic head, {self._EXPECTED_REVISION!r}, " f"got: {heads}"
-        )
+        assert len(heads) == 1, f"Expected one alembic head, got: {heads}"
+        revisions = {item.revision for item in script.iterate_revisions(heads[0], "base")}
+        assert self._EXPECTED_REVISION in revisions
 
     def test_down_revision_chains_off_0006(self) -> None:
         """0007's down_revision is 0006_siege_month_conditions (plan §4.2)."""

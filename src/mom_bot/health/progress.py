@@ -12,6 +12,8 @@ from typing import Literal
 
 from aiohttp import web
 
+from mom_bot.maintenance import gate as maintenance_gate
+
 SchedulerName = Literal["reminders", "auto_kick"]
 PROGRESS_THRESHOLD_SECONDS = 180.0
 
@@ -53,6 +55,7 @@ def stopped(name: SchedulerName) -> None:
 def snapshot() -> dict[str, object]:
     """Return sanitized progress, using monotonic age rather than wall time."""
     now = time.monotonic()
+    paused = maintenance_gate.state() == "paused"
     schedulers: dict[str, dict[str, object]] = {}
     for name, state in _states.items():
         age = None if state.last_success is None else max(0.0, now - state.last_success)
@@ -60,6 +63,8 @@ def snapshot() -> dict[str, object]:
             status = "stopped"
         elif state.failed:
             status = "failed"
+        elif paused:
+            status = "paused"
         elif age is None:
             status = "starting"
         elif age >= PROGRESS_THRESHOLD_SECONDS:
@@ -67,7 +72,7 @@ def snapshot() -> dict[str, object]:
         else:
             status = "healthy"
         schedulers[name] = {
-            "healthy": status == "healthy",
+            "healthy": status in {"healthy", "paused"},
             "status": status,
             "last_success_age_seconds": None if age is None else round(age, 1),
         }

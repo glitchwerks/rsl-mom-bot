@@ -68,6 +68,7 @@ from sqlalchemy.orm import Session
 
 import mom_bot.health as health
 from mom_bot.health import progress
+from mom_bot.maintenance import gate as maintenance_gate
 from mom_bot.member_notifications.service import MemberNotificationService
 from mom_bot.reminders.calendar import (
     is_end_of_tank_date,
@@ -185,7 +186,9 @@ class ReminderScheduler:
 
             try:
                 completed = await self._process_tick(today_weekday, now_time, today_date)
-                if completed:
+                if completed is None:
+                    pass  # An intentional pause does not record successful work.
+                elif completed:
                     progress.succeeded("reminders")
                 else:
                     progress.failed("reminders")
@@ -203,6 +206,17 @@ class ReminderScheduler:
             await asyncio.sleep(self._tick_seconds)
 
     async def _process_tick(
+        self,
+        today_weekday: int,
+        now_time: datetime.time,
+        today_date: datetime.date,
+    ) -> bool | None:
+        with maintenance_gate.admitted() as allowed:
+            if not allowed:
+                return None
+            return await self._process_tick_unchecked(today_weekday, now_time, today_date)
+
+    async def _process_tick_unchecked(
         self,
         today_weekday: int,
         now_time: datetime.time,

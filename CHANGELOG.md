@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Opt-in portable maintenance admission for sidecar requests, slash commands,
+  gateway handlers, and scheduler work, with a protected shared control file
+  and authenticated in-flight status for paired bearer rotation. Resume scans
+  current guild joins using durable claims and holds auto-kicks when first
+  messages may have been missed (#395).
+
 - Private scheduler-progress health reports completed reminder and automatic member-sweep cycles, with immediate query/retry failure, stall and stopped-task detection; existing Azure liveness and sidecar contracts remain unchanged.
 
 - Explicit environment/file secret sources and PostgreSQL password authentication for portable deployments, preserving Azure defaults; selected database authentication is shared with migrations (#377).

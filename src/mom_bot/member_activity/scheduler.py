@@ -11,6 +11,7 @@ import discord
 from sqlalchemy.orm import Session
 
 from mom_bot.health import progress
+from mom_bot.maintenance import gate as maintenance_gate
 from mom_bot.member_activity.models import MemberActivity
 from mom_bot.member_activity.service import MemberActivityService
 
@@ -93,10 +94,16 @@ class AutoKickScheduler:
             for activity in stale_members:
                 await self._process_member(activity)
 
-            progress.succeeded("auto_kick")
+            if maintenance_gate.state() != "paused":
+                progress.succeeded("auto_kick")
             await asyncio.sleep(self._tick_seconds)
 
     async def _process_member(self, activity: MemberActivity) -> None:
+        with maintenance_gate.admitted() as allowed:
+            if allowed:
+                await self._process_member_unchecked(activity)
+
+    async def _process_member_unchecked(self, activity: MemberActivity) -> None:
         """Resolve, notify, and kick one stale member with terminal cleanup.
 
         Args:
@@ -105,6 +112,14 @@ class AutoKickScheduler:
         Raises:
             asyncio.CancelledError: Propagated when the task is cancelled.
         """
+        if maintenance_gate.uncertain_member_activity(activity.joined_at):
+            _logger.warning(
+                "auto-kick: holding member %d in guild %d for activity review after maintenance",
+                activity.member_id,
+                activity.guild_id,
+            )
+            return
+
         member = self._guild.get_member(activity.member_id)
         if member is None:
             try:

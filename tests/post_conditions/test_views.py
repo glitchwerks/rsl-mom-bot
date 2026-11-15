@@ -8,7 +8,7 @@ and the live-updating selection-summary embed.
 from __future__ import annotations
 
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import discord
 import pytest
@@ -850,3 +850,77 @@ async def test_save_callback_handles_siege_web_error() -> None:
 
     interaction.response.send_message.assert_awaited_once()
     interaction.response.edit_message.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_save_callback_respects_maintenance_pause() -> None:
+    """An already-open view cannot write through a paused bot."""
+    from mom_bot.post_conditions.views import PostConditionsGridView, SaveButton
+
+    siege_client = MagicMock()
+    siege_client.set_my_preferences = AsyncMock()
+    view = PostConditionsGridView(
+        catalog=[
+            {
+                "id": 1,
+                "condition_type": "faction",
+                "description": "Only Banner Lord Champions can be used.",
+            }
+        ],
+        preferences=[],
+        discord_id="42",
+        discord_username="testuser",
+        siege_client=siege_client,
+    )
+    save_btn = next(c for c in view.children if isinstance(c, SaveButton))
+    save_btn._view = view
+    interaction = MagicMock()
+    interaction.response.send_message = AsyncMock()
+    interaction.response.edit_message = AsyncMock()
+    with patch("mom_bot.post_conditions.views.maintenance_gate.begin", return_value=False):
+        await save_btn.callback(interaction)
+    siege_client.set_my_preferences.assert_not_awaited()
+    interaction.response.send_message.assert_awaited_once()
+    interaction.response.edit_message.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_save_callback_counts_inflight_write_until_response() -> None:
+    import asyncio
+
+    from mom_bot.maintenance import MaintenanceGate
+    from mom_bot.post_conditions.views import PostConditionsGridView, SaveButton
+
+    entered, release = asyncio.Event(), asyncio.Event()
+
+    async def save(**_kwargs):
+        entered.set()
+        await release.wait()
+
+    siege_client = MagicMock()
+    siege_client.set_my_preferences = AsyncMock(side_effect=save)
+    view = PostConditionsGridView(
+        catalog=[
+            {
+                "id": 1,
+                "condition_type": "faction",
+                "description": "Only Banner Lord Champions can be used.",
+            }
+        ],
+        preferences=[],
+        discord_id="42",
+        discord_username="testuser",
+        siege_client=siege_client,
+    )
+    save_btn = next(c for c in view.children if isinstance(c, SaveButton))
+    save_btn._view = view
+    interaction = MagicMock()
+    interaction.response.edit_message = AsyncMock()
+    probe_gate = MaintenanceGate(enabled=False, state_file="")
+    with patch("mom_bot.post_conditions.views.maintenance_gate", probe_gate):
+        task = asyncio.create_task(save_btn.callback(interaction))
+        await asyncio.wait_for(entered.wait(), timeout=2)
+        assert probe_gate.snapshot()["inflight"] == 1
+        release.set()
+        await task
+        assert probe_gate.snapshot()["inflight"] == 0

@@ -9,7 +9,7 @@ from sqlalchemy.orm import Mapped, mapped_column
 
 from mom_bot.db import Base
 
-__all__ = ["MemberActivity"]
+__all__ = ["MemberActivity", "MemberJoinClaim"]
 
 
 class MemberActivity(Base):
@@ -41,3 +41,17 @@ class MemberActivity(Base):
         DateTime,
         nullable=True,
     )
+
+
+class MemberJoinClaim(Base):
+    """Keep a join notification claim after activity tracking is removed."""
+
+    __tablename__ = "member_join_claim"
+    __table_args__ = (
+        UniqueConstraint("guild_id", "member_id", "joined_at", name="uq_member_join_claim_join"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    guild_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    member_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    joined_at: Mapped[datetime.datetime] = mapped_column(DateTime, nullable=False)

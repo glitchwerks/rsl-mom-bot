@@ -17,6 +17,7 @@ from typing import Any
 import discord
 import discord.ui
 
+from mom_bot.maintenance import gate as maintenance_gate
 from mom_bot.post_conditions.client import SiegeWebError
 from mom_bot.post_conditions.discord_display import short_label
 from mom_bot.post_conditions.grid_layout import GridPage, split_by_meta_group
@@ -515,25 +516,32 @@ class SaveButton(discord.ui.Button["PostConditionsGridView"]):
         """
         view = self.view
         assert view is not None
-        ids = [cid for cid, on in view._selections.items() if on]
-        try:
-            await view._siege_client.set_my_preferences(
-                discord_id=view._discord_id,
-                discord_username=view._discord_username,
-                ids=ids,
-            )
-        except SiegeWebError:
-            _logger.exception(
-                "set_my_preferences failed for discord_id=%s",
-                view._discord_id,
-            )
-            await interaction.response.send_message(
-                "Could not save preferences. Try again.", ephemeral=True
-            )
-            return
-        embed = view._build_embed_for_current_page()
-        embed.title = "Preferences saved"
-        await interaction.response.edit_message(embed=embed, view=None)
+        with maintenance_gate.admitted() as allowed:
+            if not allowed:
+                await interaction.response.send_message(
+                    "Maintenance is in progress. Please try again shortly.",
+                    ephemeral=True,
+                )
+                return
+            ids = [cid for cid, on in view._selections.items() if on]
+            try:
+                await view._siege_client.set_my_preferences(
+                    discord_id=view._discord_id,
+                    discord_username=view._discord_username,
+                    ids=ids,
+                )
+            except SiegeWebError:
+                _logger.exception(
+                    "set_my_preferences failed for discord_id=%s",
+                    view._discord_id,
+                )
+                await interaction.response.send_message(
+                    "Could not save preferences. Try again.", ephemeral=True
+                )
+                return
+            embed = view._build_embed_for_current_page()
+            embed.title = "Preferences saved"
+            await interaction.response.edit_message(embed=embed, view=None)
 
 
 class CancelButton(discord.ui.Button["PostConditionsGridView"]):
