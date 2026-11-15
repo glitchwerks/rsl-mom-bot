@@ -94,6 +94,7 @@ Missing-HTTPException-catch + welcome/officer-DM decoupling (fix 3)
 
 from __future__ import annotations
 
+import datetime
 import logging
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -146,6 +147,7 @@ def _make_member(*, guild_id: int = _TARGET_GUILD_ID) -> MagicMock:
     member.id = _MEMBER_ID
     member.mention = f"<@{_MEMBER_ID}>"
     member.bot = False
+    member.joined_at = datetime.datetime(2026, 11, 15, 12, 0, tzinfo=datetime.UTC)
     member.guild = MagicMock()
     member.guild.id = guild_id
     return member
