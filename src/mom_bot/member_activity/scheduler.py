@@ -94,7 +94,8 @@ class AutoKickScheduler:
             for activity in stale_members:
                 await self._process_member(activity)
 
-            progress.succeeded("auto_kick")
+            if maintenance_gate.state() != "paused":
+                progress.succeeded("auto_kick")
             await asyncio.sleep(self._tick_seconds)
 
     async def _process_member(self, activity: MemberActivity) -> None:

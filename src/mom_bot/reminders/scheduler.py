@@ -186,7 +186,9 @@ class ReminderScheduler:
 
             try:
                 completed = await self._process_tick(today_weekday, now_time, today_date)
-                if completed:
+                if completed is None:
+                    pass  # An intentional pause does not record successful work.
+                elif completed:
                     progress.succeeded("reminders")
                 else:
                     progress.failed("reminders")
@@ -208,10 +210,10 @@ class ReminderScheduler:
         today_weekday: int,
         now_time: datetime.time,
         today_date: datetime.date,
-    ) -> bool:
+    ) -> bool | None:
         with maintenance_gate.admitted() as allowed:
             if not allowed:
-                return True  # Maintenance skip is a completed scheduler cycle.
+                return None
             return await self._process_tick_unchecked(today_weekday, now_time, today_date)
 
     async def _process_tick_unchecked(

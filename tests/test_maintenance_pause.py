@@ -9,6 +9,7 @@ import pytest
 from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
 
+from mom_bot.health import progress
 from mom_bot.maintenance import MaintenanceGate, MaintenancePauseMiddleware
 from mom_bot.member_activity.scheduler import AutoKickScheduler
 from mom_bot.reminders.scheduler import ReminderScheduler
@@ -97,8 +98,22 @@ async def test_paused_scheduler_work_does_not_enter_mutating_body():
             await ReminderScheduler._process_tick(
                 reminder, 0, datetime.time(), datetime.date.today()
             )
-            is True
+            is None
         )
         await AutoKickScheduler._process_member(kick, MagicMock())
     reminder._process_tick_unchecked.assert_not_awaited()
     kick._process_member_unchecked.assert_not_awaited()
+
+
+def test_progress_reports_intentional_pause_without_claiming_success():
+    progress.started("reminders")
+    progress.started("auto_kick")
+    try:
+        with patch("mom_bot.health.progress.maintenance_gate.state", return_value="paused"):
+            snapshot = progress.snapshot()
+        assert snapshot["healthy"] is True
+        assert snapshot["schedulers"]["reminders"]["status"] == "paused"
+        assert snapshot["schedulers"]["reminders"]["last_success_age_seconds"] is None
+    finally:
+        progress.stopped("reminders")
+        progress.stopped("auto_kick")
