@@ -466,17 +466,10 @@ SiegeWebClient` instance registered via :func:`make_client`; stored so
         Args:
             member: The guild member whose join event Discord dispatched.
         """
-        async with self._join_lock:
-            await self._handle_member_join(member)
+        await self._handle_member_join(member)
 
-    async def _handle_member_join(self, member: discord.Member) -> None:
-        """Claim one join before any welcome or officer notification."""
-        if member.bot:
-            return
-
-        if self.guild is None or member.guild.id != self.guild.id:
-            return
-
+    def _record_join_for_delivery(self, member: discord.Member) -> bool:
+        """Persist the join claim before Discord I/O, under the short join lock."""
         factory = self._db_session_factory
         if not maintenance_gate.enabled:
             try:
@@ -493,35 +486,43 @@ SiegeWebClient` instance registered via :func:`make_client`; stored so
                     member.id,
                     member.guild.id,
                 )
-        else:
-            if factory is None:
-                _logger.error("Cannot claim join without database session factory")
-                return
-            joined_at = member.joined_at
-            if (
-                not isinstance(joined_at, datetime.datetime)
-                or joined_at.tzinfo is None
-                or joined_at.utcoffset() is None
-            ):
-                _logger.warning(
-                    "Cannot claim join without Discord timestamp for member %d", member.id
-                )
-                return
-            activity_service = MemberActivityService(factory)
-            try:
-                claimed = activity_service.claim_join(
-                    member.guild.id,
-                    member.id,
-                    joined_at.astimezone(datetime.UTC).replace(tzinfo=None),
-                )
-            except Exception:
-                _logger.exception(
-                    "Failed to claim join activity for member %d in guild %d",
-                    member.id,
-                    member.guild.id,
-                )
-                return
-            if not claimed:
+            return True
+
+        if factory is None:
+            _logger.error("Cannot claim join without database session factory")
+            return False
+        joined_at = member.joined_at
+        if (
+            not isinstance(joined_at, datetime.datetime)
+            or joined_at.tzinfo is None
+            or joined_at.utcoffset() is None
+        ):
+            _logger.warning("Cannot claim join without Discord timestamp for member %d", member.id)
+            return False
+        try:
+            return MemberActivityService(factory).claim_join(
+                member.guild.id,
+                member.id,
+                joined_at.astimezone(datetime.UTC).replace(tzinfo=None),
+            )
+        except Exception:
+            _logger.exception(
+                "Failed to claim join activity for member %d in guild %d",
+                member.id,
+                member.guild.id,
+            )
+            return False
+
+    async def _handle_member_join(self, member: discord.Member) -> None:
+        """Claim one join before any welcome or officer notification."""
+        if member.bot:
+            return
+
+        if self.guild is None or member.guild.id != self.guild.id:
+            return
+
+        async with self._join_lock:
+            if not self._record_join_for_delivery(member):
                 return
 
         await self._send_welcome_message(member)

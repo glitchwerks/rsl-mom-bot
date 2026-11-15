@@ -1,5 +1,6 @@
 """Disposable reconciliation of joins missed during a portable pause."""
 
+import asyncio
 import datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -78,3 +79,48 @@ async def test_resume_scan_claims_only_missed_join_once():
     assert tracked is not None
     assert tracked.joined_at == missed.joined_at.replace(tzinfo=None)
     assert MemberActivityService(factory).get_tracking(123, 789) is None
+
+
+@pytest.mark.asyncio
+async def test_slow_welcome_does_not_block_second_join_activity():
+    engine = create_engine("sqlite+pysqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    factory = sessionmaker(engine, expire_on_commit=False)
+    bot = MomBot(build_intents())
+    bot.guild = discord.Object(id=123)
+    bot._db_session_factory = factory
+    first, second = MagicMock(spec=discord.Member), MagicMock(spec=discord.Member)
+    for member, identifier in ((first, 456), (second, 789)):
+        member.id = identifier
+        member.bot = False
+        member.mention = f"<@{identifier}>"
+        member.guild.id = 123
+        member.joined_at = datetime.datetime.now(datetime.UTC)
+    first_send_started, release_first = asyncio.Event(), asyncio.Event()
+
+    async def send(content):
+        if "<@456>" in content:
+            first_send_started.set()
+            await release_first.wait()
+
+    channel = MagicMock()
+    channel.send = AsyncMock(side_effect=send)
+    with (
+        patch("mom_bot.main.load_secret", return_value="999"),
+        patch.object(bot, "get_channel", return_value=channel),
+        patch("mom_bot.main.NewMemberAlertService.list_subscriber_ids", return_value=[]),
+    ):
+        first_task = asyncio.create_task(bot.on_member_join(first))
+        await asyncio.wait_for(first_send_started.wait(), timeout=2)
+        await asyncio.wait_for(bot.on_member_join(second), timeout=2)
+        message = MagicMock(spec=discord.Message)
+        message.author.id = 789
+        message.author.bot = False
+        message.guild.id = 123
+        message.created_at = datetime.datetime.now(datetime.UTC)
+        await bot.on_message(message)
+        release_first.set()
+        await first_task
+
+    tracked = MemberActivityService(factory).get_tracking(123, 789)
+    assert tracked is not None and tracked.first_message_at is not None
