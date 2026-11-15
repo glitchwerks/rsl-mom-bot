@@ -168,12 +168,8 @@ async def test_rotated_outbound_bearer_requires_client_recreation() -> None:
     _inject_session(old_client, old_session)
     _inject_session(new_client, new_session)
 
-    await old_client.get_my_preferences(
-        discord_id=_DISCORD_ID, discord_username=_DISCORD_USERNAME
-    )
-    await new_client.get_my_preferences(
-        discord_id=_DISCORD_ID, discord_username=_DISCORD_USERNAME
-    )
+    await old_client.get_my_preferences(discord_id=_DISCORD_ID, discord_username=_DISCORD_USERNAME)
+    await new_client.get_my_preferences(discord_id=_DISCORD_ID, discord_username=_DISCORD_USERNAME)
 
     assert old_session.get.call_args.kwargs["headers"]["Authorization"] == f"Bearer {old_token}"
     assert new_session.get.call_args.kwargs["headers"]["Authorization"] == f"Bearer {new_token}"
