@@ -48,6 +48,9 @@ async def test_resume_scan_claims_only_missed_join_once():
     channel = MagicMock()
     channel.send = AsyncMock()
     with (
+        patch("mom_bot.main.maintenance_gate.enabled", True),
+        patch("mom_bot.main.maintenance_gate.begin", return_value=True),
+        patch("mom_bot.main.maintenance_gate.end"),
         patch("mom_bot.main.maintenance_gate.reconciliation_window", return_value=window),
         patch("mom_bot.main.load_secret", return_value="999"),
         patch.object(bot, "get_channel", return_value=channel),
@@ -60,6 +63,9 @@ async def test_resume_scan_claims_only_missed_join_once():
     restarted.guild = discord.Object(id=123)
     restarted._db_session_factory = factory
     with (
+        patch("mom_bot.main.maintenance_gate.enabled", True),
+        patch("mom_bot.main.maintenance_gate.begin", return_value=True),
+        patch("mom_bot.main.maintenance_gate.end"),
         patch("mom_bot.main.maintenance_gate.reconciliation_window", return_value=window),
         patch("mom_bot.main.load_secret", return_value="999"),
         patch.object(restarted, "get_channel", return_value=channel),

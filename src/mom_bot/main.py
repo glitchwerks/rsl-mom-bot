@@ -478,7 +478,25 @@ SiegeWebClient` instance registered via :func:`make_client`; stored so
             return
 
         factory = self._db_session_factory
-        if factory is not None:
+        if not maintenance_gate.enabled:
+            try:
+                if factory is None:
+                    raise RuntimeError("Database session factory is not initialized")
+                MemberActivityService(factory).record_join(
+                    member.guild.id,
+                    member.id,
+                    datetime.datetime.now(datetime.UTC).replace(tzinfo=None),
+                )
+            except Exception:
+                _logger.exception(
+                    "Failed to record join activity for member %d in guild %d",
+                    member.id,
+                    member.guild.id,
+                )
+        else:
+            if factory is None:
+                _logger.error("Cannot claim join without database session factory")
+                return
             joined_at = member.joined_at
             if (
                 not isinstance(joined_at, datetime.datetime)
