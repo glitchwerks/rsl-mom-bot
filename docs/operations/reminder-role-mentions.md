@@ -26,14 +26,23 @@ templates for `@everyone`, `@here`, or other mentions before granting
 permissions may change after startup,
 Discord may suppress push notifications, and member notification settings vary.
 
-For the current production finding under #386, first verify the six stored
-reminders still point to the intended Member role and destination channel(s)
-without editing them. Review the intended notification scope with a guild
-administrator. The narrow channel-specific option is to grant the bot role
-`Mention Everyone` only in the reminders channel; the alternative is making
-Member mentionable to everyone guild-wide. Record the current permissions and
-the exact change before applying either option. After a separately authorized
-change, recheck effective permissions and use a naturally scheduled reminder
-or a separately approved controlled test recipient to confirm notification.
-Do not send an unsolicited mass mention. Preserve existing schedules, channels
-and delivery history. Roll back only the exact permission change if needed.
+## Current production decision
+
+The operator decided on 2026-11-15 to keep Member role notifications disabled
+under #386. Do not grant the bot `Mention Everyone` in reminder channels or make
+Member mentionable guild-wide for this feature. The last read-only production
+inspection found all six reminders still stored a Member role ID, but effective
+permission to notify that role was false. The scheduler may still render role
+markup in reminder text; this permission decision prevents the role ping in the
+inspected configuration. A later Discord permission change could make those
+stored mentions notify members, so recheck the aggregate startup audit and the
+effective channel/role permissions after any guild permission change. Preserve
+existing reminder schedules, channels and delivery history.
+
+If the guild later chooses to enable role notifications, review the exact
+stored targets and message templates first. The channel-specific option is to
+grant the bot `Mention Everyone` only in the reminder channel; the alternative
+is making Member mentionable guild-wide. Either option needs separate approval,
+an effective-permission recheck and a natural or separately approved controlled
+notification test. Do not send an unsolicited mass mention. Roll back only the
+exact permission change if needed.
