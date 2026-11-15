@@ -69,9 +69,13 @@ reverse protected API bearer pairs, affected consumers, and failure recovery.
 The present secret loader caches successful values for the process lifetime;
 editing a host environment or secret file does not update a running Mom process.
 Keep the two bearer values paired with Siege's protected runtime inputs and
-restart only the affected services under a reviewed write/notification pause.
+recreate only the affected containers under a reviewed write/notification pause.
+The phase-scoped runner must use targeted
+`docker compose up --no-deps --no-build --pull never --force-recreate --wait backend mom`;
+`docker compose restart`
+does not reload changed `env_file` values.
 Neither current bearer protocol supports an old/new overlap token. A one-sided
-restart is not a completed rotation. Do not log or hash bearer values in evidence.
+recreation is not a completed rotation. Do not log or hash bearer values in evidence.
 If the old bearer was exposed, never restore it during incident recovery; keep
 the path isolated and stage another fresh pair after a failed activation.
 
@@ -80,7 +84,8 @@ with Siege `DISCORD_BOT_API_KEY`. `MOM_BOT_SECRET_SIEGE_WEB_BOT_TOKEN` is Mom's
 outbound bearer paired with Siege `BOT_SERVICE_TOKEN`. They are independent
 trust boundaries and must be rotated as separate authorized operations.
 `MOM_BOT_SECRET_DISCORD_TOKEN` is the Discord application token; a Developer
-Portal reset revokes the prior token and requires a targeted Mom restart.
+Portal reset revokes the prior token and requires targeted Mom container
+recreation to load the changed environment file.
 Rehearse against the isolated application first; do not start a second
 production-connected bot. Recovery after a portal reset uses a fresh token,
 not the revoked old file.
