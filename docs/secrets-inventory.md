@@ -1,5 +1,12 @@
 # Secrets Inventory
 
+This is the **Azure Key Vault adapter inventory**, retained for Azure recovery.
+The current single-Mom portable production stack uses protected host runtime
+files instead. Use the [shared portable credential inventory and rotation
+contract](https://github.com/glitchwerks/rsl-mom-apps/blob/main/docs/portable-credential-rotation.md)
+for that topology. Do not apply the historical Key Vault three-secret rotation
+sequence to the VPS or infer current portable values from this table.
+
 Catalog of all secrets stored in Key Vault `kv-mombot-eastus2`
 (subscription `213aa1f8-32d1-4ffe-8f4d-6e60f1cd9dc0`, tenant
 `cmbdevoutlook333.onmicrosoft.com`).

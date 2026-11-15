@@ -63,11 +63,41 @@ if the secret source was left at its Azure default; configure both choices delib
 
 ## Rotation and recovery
 
-For a portable deployment, rotate the database credential and secret values through
-the approved deployment procedure, then restart only affected services with matching
-configuration. Verify database connectivity and service health without logging secret
-values. Preserve independently restorable database backups and protected secret
-recovery material; mounted files alone are not a backup strategy.
+Use the [shared portable credential inventory and rotation contract](https://github.com/glitchwerks/rsl-mom-apps/blob/main/docs/portable-credential-rotation.md)
+for the current single-Mom topology. It names the separate sidecar inbound and
+reverse protected API bearer pairs, affected consumers, and failure recovery.
+The present secret loader caches successful values for the process lifetime;
+editing a host environment or secret file does not update a running Mom process.
+Keep the two bearer values paired with Siege's protected runtime inputs and
+restart only the affected services under a reviewed write/notification pause.
+Neither current bearer protocol supports an old/new overlap token. A one-sided
+restart is not a completed rotation. Do not log or hash bearer values in evidence.
+
+`MOM_BOT_SECRET_DISCORD_BOT_API_KEY` is the Mom inbound sidecar bearer paired
+with Siege `DISCORD_BOT_API_KEY`. `MOM_BOT_SECRET_SIEGE_WEB_BOT_TOKEN` is Mom's
+outbound bearer paired with Siege `BOT_SERVICE_TOKEN`. They are independent
+trust boundaries and must be rotated as separate authorized operations.
+`MOM_BOT_SECRET_DISCORD_TOKEN` is the Discord application token; a Developer
+Portal reset revokes the prior token and requires a targeted Mom restart.
+Rehearse against the isolated application first; do not start a second
+production-connected bot. Recovery after a portal reset uses a fresh token,
+not the revoked old file.
+
+`MOM_BOT_DATABASE_URL` carries the `mom_app` role password for runtime and
+migrations. The separate raw `MOM_DB_PASSWORD` in the protected portable
+database environment is also used by the local readiness probe. Changing an
+existing role requires a database administrator operation; editing either file
+or rerunning first-boot SQL does not rotate the live password. Pause Mom and
+its migration/probe clients, preserve a verified backup and rollback material,
+change only that role, update both protected inputs, and verify a fresh
+authenticated connection before resuming. Do not rotate Siege's distinct
+`siege_app` role as an accidental side effect. No production operation is
+authorized by this documentation change.
+
+Preserve independently restorable database backups and protected secret
+recovery material; mounted files alone are not a backup strategy. Use a
+phase-scoped sanitized report for each separately approved rehearsal or live
+operation, with no secret values or message/member content.
 
 Returning to Azure uses the retained infrastructure and Azure defaults. Before any
 cutover, stop the old writer/bot, reconcile and restore current database state, verify
