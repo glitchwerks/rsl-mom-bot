@@ -42,18 +42,42 @@ absolute timestamps, tokens or workload content. The endpoint is read-only.
 Keep port 8080 private. Do not expose scheduler health or general sidecar routes
 through Caddy/public ingress. A reviewed local probe must check both gateway
 connection and scheduler progress, then export a sanitized success signal to an
-independent monitoring service. Slack is the proposed operator destination.
+independent monitoring service. Infrastructure Slack is the primary operator
+destination and email is the fallback.
 **The Discord bot must not be the alert transport:** a failed bot or VPS cannot
 notify about its own disappearance. The external service must detect missing
 signals and deliver outage/recovery notifications to Slack even while this VM
 is off. Slack delivery and an independent missed-signal monitor are separate
 requirements; posting from the scheduler directly to a webhook is insufficient.
 
-No monitor account, Slack webhook/channel, timer or heartbeat sender is configured
-by this change. Keep webhook URLs in protected secret storage; do not put them in
-Compose examples, reports, logs or Git. Reusing an existing operator Slack channel
-is an option after its ownership and notification routing are confirmed. The
-existing Azure alert transport is preserved.
+As of 2026-11-15, the Healthchecks.io account has a paused production check for
+the Mom gateway and scheduler signal. A disposable check proved failure,
+recovery and missed-signal delivery to Slack `#alerts` and fallback email. The
+production check is still paused; no producer timer or heartbeat sender is
+active. Keep check ping URLs and any webhook material in protected secret
+storage, never in Compose examples, reports, logs or Git. The existing Azure
+alert transport is preserved. [Siege #579](https://github.com/glitchwerks/rsl-siege-manager/issues/579)
+owns collector, receiver and live delivery acceptance.
+
+## Triage and acceptance boundary
+
+Mom owns the gateway connection and completed scheduler-progress semantics.
+The Siege host collector owns the private probe invocation and independent
+ping. If the receiver reports this check down, first distinguish a missed ping
+from an explicit failure ping, then inspect the local probe's exit status and
+the sanitized progress statuses (`starting`, `stopped`, `failed`, `stale`,
+`paused`, or `healthy`). A connected gateway with stale scheduler progress is
+unhealthy; a healthy HTTP listener does not override a disconnected gateway.
+During an approved maintenance pause, `paused` is healthy only while both
+scheduler tasks remain running. A 503 or probe timeout is a failure signal.
+
+Record the producer image digest/source, consumer configuration, check cadence
+and grace, signal transition timestamps, and Slack/email receipt in the linked
+acceptance evidence. Use the isolated test identity for controlled gateway
+loss, scheduler stall, recovery and missed-signal tests. Do not restart the
+database, whole stack, or production bot to force an alert. Production receiver
+activation and any bounded recovery policy remain separate approvals under
+[Mom #388](https://github.com/glitchwerks/rsl-mom-bot/issues/388) and Siege #579.
 
 Before live activation, separately approve the isolated target, local probe,
 monitor/destination, cadence/grace, operator Slack channel and expected outage /
