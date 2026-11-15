@@ -23,16 +23,20 @@ from __future__ import annotations
 
 import os
 from typing import Any
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import discord
+import pytest
+from fastapi import HTTPException
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from mom_bot.db import Base
+from mom_bot.post_conditions.client import SiegeWebAuthError, SiegeWebClient
 from mom_bot.sidecar.app import build_app
+from mom_bot.sidecar.auth import make_bearer_dependency
 from mom_bot.sidecar.models import MemberRoleSyncState as _MemberRoleSyncState  # noqa: F401
 
 # ---------------------------------------------------------------------------
@@ -321,6 +325,67 @@ class TestBearerAuth:
                 headers={"Authorization": f"Bearer {rejected}"},
             )
             assert rejected_response.status_code == 401
+
+    @pytest.mark.asyncio
+    async def test_paired_rotation_keeps_auth_directions_independent(self) -> None:
+        """A staged pair works only after both consumers use its new bearer."""
+        inbound_old, inbound_new = "synthetic-inbound-old", "synthetic-inbound-new"
+        outbound_old, outbound_new = "synthetic-outbound-old", "synthetic-outbound-new"
+        sidecar_old = make_bearer_dependency(inbound_old)
+        sidecar_new = make_bearer_dependency(inbound_new)
+        protected_api_token = outbound_old
+
+        def sidecar_status(dependency: Any, bearer: str) -> int:
+            try:
+                dependency(authorization=f"Bearer {bearer}")
+                return 200
+            except HTTPException as error:
+                return error.status_code
+
+        def fake_get(_url: str, *, headers: dict[str, str]) -> MagicMock:
+            response = MagicMock()
+            response.status = (
+                200 if headers["Authorization"] == f"Bearer {protected_api_token}" else 401
+            )
+            response.json = AsyncMock(return_value=[])
+            context = MagicMock()
+            context.__aenter__ = AsyncMock(return_value=response)
+            context.__aexit__ = AsyncMock(return_value=False)
+            return context
+
+        async def outbound_status(client: SiegeWebClient) -> bool:
+            try:
+                await client.get_my_preferences(discord_id="123", discord_username="isolated")
+                return True
+            except SiegeWebAuthError:
+                return False
+
+        old_client = SiegeWebClient(base_url="https://isolated.invalid", token=outbound_old)
+        new_client = SiegeWebClient(base_url="https://isolated.invalid", token=outbound_new)
+        session = MagicMock()
+        session.closed = False
+        session.get.side_effect = fake_get
+        old_client._session = session
+        new_client._session = session
+
+        # Before rotation, the unrelated token cannot cross either boundary.
+        assert sidecar_status(sidecar_old, inbound_old) == 200
+        assert sidecar_status(sidecar_old, outbound_old) == 401
+        assert await outbound_status(old_client)
+        assert not await outbound_status(new_client)
+
+        # Rotate the protected API first; inbound sidecar admission still works.
+        protected_api_token = outbound_new
+        assert not await outbound_status(old_client)
+        assert await outbound_status(new_client)
+        assert sidecar_status(sidecar_old, inbound_old) == 200
+        assert sidecar_status(sidecar_old, outbound_new) == 401
+
+        # Recreating Mom activates the new inbound key without changing outbound auth.
+        assert sidecar_status(sidecar_new, inbound_old) == 401
+        assert sidecar_status(sidecar_new, inbound_new) == 200
+        assert sidecar_status(sidecar_new, outbound_new) == 401
+        assert await outbound_status(new_client)
 
     def test_missing_auth_header_returns_403(self) -> None:
         """A request to a protected endpoint with no Authorization header

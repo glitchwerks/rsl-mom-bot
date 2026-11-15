@@ -86,9 +86,13 @@ trust boundaries and must be rotated as separate authorized operations.
 `MOM_BOT_SECRET_DISCORD_TOKEN` is the Discord application token; a Developer
 Portal reset revokes the prior token and requires targeted Mom container
 recreation to load the changed environment file.
+Follow the [Discord token reset and recovery runbook](discord-token-reset.md).
 Rehearse against the isolated application first; do not start a second
 production-connected bot. Recovery after a portal reset uses a fresh token,
-not the revoked old file.
+not the revoked old file. The independent inbound and outbound bearer-pair
+rotation is owned by the [Siege phase-scoped runner](https://github.com/glitchwerks/rsl-siege-manager/blob/main/scripts/portable-vps-bearer-rotation.py),
+whose `inspect`, `stage`, `activate`, and `recover` reports contain only
+sanitized pass/fail evidence.
 
 `MOM_BOT_DATABASE_URL` carries the `mom_app` role password for runtime and
 migrations. The separate raw `MOM_DB_PASSWORD` in the protected portable
