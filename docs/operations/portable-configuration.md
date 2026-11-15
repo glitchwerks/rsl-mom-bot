@@ -72,6 +72,8 @@ Keep the two bearer values paired with Siege's protected runtime inputs and
 restart only the affected services under a reviewed write/notification pause.
 Neither current bearer protocol supports an old/new overlap token. A one-sided
 restart is not a completed rotation. Do not log or hash bearer values in evidence.
+If the old bearer was exposed, never restore it during incident recovery; keep
+the path isolated and stage another fresh pair after a failed activation.
 
 `MOM_BOT_SECRET_DISCORD_BOT_API_KEY` is the Mom inbound sidecar bearer paired
 with Siege `DISCORD_BOT_API_KEY`. `MOM_BOT_SECRET_SIEGE_WEB_BOT_TOKEN` is Mom's
