@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### 📣 Highlights
+
+This release prepares Mom for coordinated VPS updates. Operators can pause new
+bot work during a deployment, check that scheduled work is completing, and
+rotate portable credentials with a safer handoff. Member reminder mentions
+remain disabled under the current Discord role permissions.
+
 ### Added
 
 - Opt-in portable maintenance admission for sidecar requests, slash commands,
@@ -19,8 +26,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Explicit environment/file secret sources and PostgreSQL password authentication for portable deployments, preserving Azure defaults; selected database authentication is shared with migrations (#377).
 
-<!-- Add a "### 📣 Highlights" sub-section here before cutting the next release.
-     See RELEASING.md § "Discord Highlights convention" for what to write there. -->
+### Infrastructure
+
+- Release tags promote the exact Mom image built and accepted by CI, with source identity embedded in the image (#389, #390).
+- Guarded VPS promotion guidance now links Mom's release artifacts to the combined Siege/Mom candidate, backup, migration, and acceptance gates (#401).
+- Private scheduler-progress checks and portable credential-rotation verification support independent monitoring and controlled production maintenance (#379, #394, #397).
+
+### Documentation
+
+- Documented the current Member reminder-mention permissions and Mom monitoring ownership (#398, #399).
 
 ## [1.5.3] - 2026-10-03
 
