@@ -5,8 +5,9 @@ name: Release
 #   1. A GitHub Release with notes extracted from CHANGELOG.md.
 #   2. A version tag for the CI-approved GHCR image at that source SHA.
 #
-# This workflow does NOT deploy to prod.  Deploy is a separate manual step
-# via workflow_dispatch on deploy.yml.  See RELEASING.md § "Deploy is separate".
+# This workflow does NOT deploy to prod. VPS promotion is a separate protected,
+# manual Siege Manager workflow. The retained Azure deploy.yml is disabled.
+# See RELEASING.md § "Deploy is separate".
 
 on:
   push:

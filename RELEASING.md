@@ -6,7 +6,7 @@ Authoritative release process for the repo's `v*` tags. This document exists bec
 
 **A release publishes artifacts; it does not deploy production.**
 
-CI on `main` publishes `ghcr.io/glitchwerks/mom-bot:<commit-sha>`. Pushing a `v*` tag triggers `.github/workflows/release.yml`, which verifies that the tagged commit is on `main` and that its CI image exists, then attaches the version tag to that exact image and publishes a GitHub Release. The retained Azure deployment workflow is disabled after the VPS cutover. Production remains pinned until the coordinated, separately approved VPS promotion in [rsl-mom-apps#25](https://github.com/glitchwerks/rsl-mom-apps/issues/25) is implemented and accepted.
+CI on `main` publishes `ghcr.io/glitchwerks/mom-bot:<commit-sha>`. Pushing a `v*` tag triggers `.github/workflows/release.yml`, which verifies that the tagged commit is on `main` and that its CI image exists, then attaches the version tag to that exact image and publishes a GitHub Release. The retained Azure deployment workflow is disabled after the VPS cutover. Production remains pinned until the coordinated, separately approved VPS promotion in [rsl-mom-apps#25](https://github.com/glitchwerks/rsl-mom-apps/issues/25) passes its isolated rehearsal and live release gates. The protected promotion workflows are implemented in Siege Manager and require live acceptance before production use.
 
 `release.yml` also posts the Discord announcement directly as a final `notify` job (after the GitHub Release is created). It does **not** rely on a separate `release: published`-triggered workflow — GitHub does not fire cross-workflow events from `GITHUB_TOKEN`-raised release events, so a separate trigger would never fire (#274). The notification is configured via the `DISCORD_RELEASE_WEBHOOK_URL` repo secret; if the secret is absent the notify job logs a warning and exits cleanly so the overall release is not blocked.
 
@@ -134,7 +134,9 @@ git push origin vX.Y.Z
 
 ### Deploy is separate
 
-The tag does not deploy to production. The old Azure `deploy.yml` workflow is disabled; do not re-enable it for the VPS. The future guarded promotion must use a combined Siege/Mom release manifest, a fresh approval, verified backup and compatible migration gate, and post-promotion health evidence. Track that work in [Mom #387](https://github.com/glitchwerks/rsl-mom-bot/issues/387) and [coordination #25](https://github.com/glitchwerks/rsl-mom-apps/issues/25).
+The tag does not deploy to production. The old Azure `deploy.yml` workflow is disabled; do not re-enable it for the VPS. A coordinated promotion starts with a reviewed [Siege/Mom release manifest](https://github.com/glitchwerks/rsl-mom-apps/blob/main/docs/vps-release-manifest.md) containing this exact Mom source SHA, successful `main` CI run, immutable image digest, and explicit migration decision. The protected, manual [Siege Manager VPS release workflow](https://github.com/glitchwerks/rsl-siege-manager/blob/main/docs/operations/vps-release-workflow.md) then validates the candidate, pauses writers, proves a fresh encrypted off-host backup and isolated restore, applies any reviewed Mom migration separately, promotes the pinned images, and checks the Mom gateway, scheduler, and sidecar after activation. Each production phase has its own approval or confirmation; a release tag grants none of them.
+
+The repository workflow is implemented, but live acceptance remains open. Require an accepted isolated rehearsal, external-sidecar smoke, and a healthy production backup path before any production dispatch. Do not use the old Azure workflow as a shortcut. Track completion in [Mom #387](https://github.com/glitchwerks/rsl-mom-bot/issues/387) and [coordination #25](https://github.com/glitchwerks/rsl-mom-apps/issues/25).
 
 ## Versioning policy
 
